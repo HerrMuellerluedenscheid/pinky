@@ -1,3 +1,5 @@
+import matplotlib as mpl
+mpl.use('Agg')
 
 from .data import *
 from .tf_util import *
@@ -40,10 +42,9 @@ class Model(Object):
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
 
-        # initializer = tf.truncated_normal_initializer(
-        self.initializer = tf.random_normal_initializer(
-            # mean=0.5, stddev=0.1)
-            mean=0.0, stddev=0.1)
+        self.initializer = tf.truncated_normal_initializer(
+            mean=0.5, stddev=0.1)
+            #mean=0.0, stddev=0.1)
 
     def generate_input(self):
         ''' Generates data and labels. '''
@@ -58,8 +59,10 @@ class Model(Object):
 
     def generate_evaluation_input(self):
         ''' Generatas evaluation data and labels.'''
-        self.evaluation_data_generator.get_dataset()
-        dataset = dataset.batch(self.batch_size)
+        dataset = self.evaluation_data_generator.get_dataset()
+        # dataset = dataset.batch(self.batch_size)
+        if self.shuffle_size:
+            dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         return dataset.make_one_shot_iterator().get_next()
 
     def time_axis_cnn(self, input, n_filters, cross_channel_kernel=None,
@@ -142,13 +145,17 @@ class Model(Object):
         variable_summaries(predictions, 'predictions')
 
         errors = predictions - labels
-        tf.summary.scalar('error_z_mean', tf.reduce_mean(errors[-1]))
-        tf.summary.scalar('error_lateral_mean',
-               tf.reduce_mean(tf.sqrt(tf.reduce_sum(errors[0: 1]**2,
-                   keepdims=False))))
+        variable_summaries(tf.reduce_mean(errors[-1]), 'error_z')
+        variable_summaries(
+                tf.reduce_mean(
+                    tf.sqrt(tf.reduce_sum(errors[0: 1]**2, keepdims=False))),
+                'error_lateral')
+
         loss = tf.reduce_mean(tf.sqrt(tf.reduce_sum((predictions - labels) ** 2, axis=1,
             keepdims=False)))
         loss = tf.Print(loss, [loss], "Mean Euclidian Error [m]: ")
+        variable_summaries(loss, 'training_loss')
+
         # lossalternative= tf.losses.mean_squared_error(
         #     labels,
         #     predictions,
@@ -157,13 +164,11 @@ class Model(Object):
         #     loss_collection=tf.GraphKeys.LOSSES,
         #     reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS
         # )
-        # tf.summary.scalar('lossalternative', lossalternative)
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
                     learning_rate=params.get('learning_rate', 1e-4))
             train_op = optimizer.minimize(
                     loss=loss, global_step=tf.train.get_global_step())
-            tf.summary.scalar('loss', loss)
 
             return tf.estimator.EstimatorSpec(
                     mode=mode,
@@ -191,18 +196,17 @@ class Model(Object):
             est.train(input_fn=self.generate_input)
 
     def evaluate(self, params=None):
-        logging.info('====== start evaluation')
         params = params or {}
+        logging.info('====== start evaluation')
         if self.evaluation_data_generator is None:
             logging.warn(
-                'No evaluation data generator set! Can\'t evalauate after training')
+                'No evaluation data generator set! Can\'t evaluate')
             return
 
         with self.sess as default:
             est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.outdir, params=params)
-            return est.evaluate(input_fn=self.generate_evaluation_input, steps=1,
-                    params=params)
+            return est.evaluate(input_fn=self.generate_evaluation_input, steps=5)
 
     def optimize(self):
         if self.hyperparameter_optimizer is None:

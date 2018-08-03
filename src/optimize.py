@@ -1,6 +1,3 @@
-# import matplotlib as mpl
-# mpl.use('PDF')
-
 import os
 import tensorflow as tf
 from .util import delete_if_exists
@@ -97,7 +94,8 @@ class Optimizer(Object):
         self.model.outdir = self.log_dir_name(args)
         self.announce_test(args)
         try:
-            return self.model.train(args)['loss']
+            self.model.train(args)
+            return self.model.evaluate(args)['loss']
         except tf.errors.ResourceExhaustedError as e:
             logger.warn(e)
             logger.warn('Skipping this test')
