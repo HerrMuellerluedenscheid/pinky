@@ -38,6 +38,7 @@ class Model(Object):
             delete_if_exists(self.summary_outdir)
             delete_if_exists(self.outdir)
 
+        self.devices = ['/device:GPU:0', '/device:GPU:1']
         self.tf_config = tf_config
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
@@ -46,15 +47,17 @@ class Model(Object):
             mean=0.5, stddev=0.1)
             #mean=0.0, stddev=0.1)
 
-    def generate_input(self):
-        ''' Generates data and labels. '''
+    def generate_dataset(self):
         dataset = self.data_generator.get_dataset()
         dataset = dataset.batch(self.batch_size)
         if self.shuffle_size:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         dataset = dataset.repeat(count=self.n_epochs)
-        dataset = dataset.prefetch(buffer_size=self.batch_size)
+        return dataset.prefetch(buffer_size=self.batch_size)
 
+    def generate_input(self):
+        ''' Generates data and labels. '''
+        dataset = self.generate_dataset()
         return dataset.make_one_shot_iterator().get_next()
 
     def generate_evaluation_input(self):
@@ -154,6 +157,7 @@ class Model(Object):
         loss = tf.reduce_mean(tf.sqrt(tf.reduce_sum((predictions - labels) ** 2, axis=1,
             keepdims=False)))
         loss = tf.Print(loss, [loss], "Mean Euclidian Error [m]: ")
+        # loss = tf.Print(loss, [tf.train.get_global_step()], "global step ")
         variable_summaries(loss, 'training_loss')
 
         # lossalternative= tf.losses.mean_squared_error(
@@ -164,6 +168,7 @@ class Model(Object):
         #     loss_collection=tf.GraphKeys.LOSSES,
         #     reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS
         # )
+
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
                     learning_rate=params.get('learning_rate', 1e-4))
@@ -173,8 +178,9 @@ class Model(Object):
             return tf.estimator.EstimatorSpec(
                     mode=mode,
                     loss=loss,
-                    train_op=train_op,
-                    training_hooks=[self.get_summary_hook()])
+                    train_op=train_op,)
+                    # make it work for multi GPU:
+                    # training_hooks=[self.get_summary_hook()])
 
         elif mode == tf.estimator.ModeKeys.EVAL:
             return tf.estimator.EstimatorSpec(mode=mode, loss=loss)
@@ -197,16 +203,14 @@ class Model(Object):
 
     def train_multi_gpu(self, params=None):
         params = params or {}
-        # taken from medium.com:
-        # https://medium.com/@fanzongshaoxing/summary-of-tensorflow-at-google-i-o-2018-155de4da14a8
         with self.sess as default:
-            distribution = tf.contrib.distribute.MirroredStrategy() # mirrored strategy for multi GPU distribution
+            distribution = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
             run_config = tf.estimator.RunConfig(train_distribute=distribution)
             est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.outdir, params=params,
-                # config=run_config)
+                config=run_config
             )
-            est.train(input_fn=self.generate_input)
+            est.train(input_fn=self.generate_dataset)
 
     # def train_multi_gpu_OLD(self, params=None):
 
@@ -327,7 +331,7 @@ def main():
 
     if args.train:
         if args.ngpu:
-            logging.ingo('Using %s GPUs' % args.ngpu)
+            logging.info('Using %s GPUs' % args.ngpu)
             model.train_multi_gpu()
         else:
             model.train()
