@@ -195,6 +195,43 @@ class Model(Object):
 
             est.train(input_fn=self.generate_input)
 
+    def train_multi_gpu(self, params=None):
+        params = params or {}
+        # taken from medium.com:
+        # https://medium.com/@fanzongshaoxing/summary-of-tensorflow-at-google-i-o-2018-155de4da14a8
+        with self.sess as default:
+            distribution = tf.contrib.distribute.MirroredStrategy() # mirrored strategy for multi GPU distribution
+            run_config = tf.estimator.RunConfig(train_distribute=distribution)
+            est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.outdir, params=params,
+                # config=run_config)
+            )
+            est.train(input_fn=self.generate_input)
+
+    # def train_multi_gpu_OLD(self, params=None):
+
+    #     params = params or {}
+    #     self.devices = []
+    #     distribution = tf.contrib.distribute.MirroredStrategy(
+    #         devices=self.devices,
+    #         # num_gpus=2,
+    #     )
+    #     with self.sess as default:
+    #         est = tf.estimator.Estimator(
+    #             model_fn=self.model, model_dir=self.outdir, params=params)
+
+    #         #est.train(input_fn=self.generate_input)
+
+    #         with distribution.scope():
+    #             merged_results = distribution.call_for_each_tower(
+    #                 est.train,
+    #                 input_fn=self.generate_input,
+
+    #             )
+
+    #             # soll eine Liste der ergebnisse der Tower sein
+    #             print(distribution.unwrap(merged_results))
+
     def evaluate(self, params=None):
         params = params or {}
         logging.info('====== start evaluation')
@@ -231,6 +268,7 @@ def main():
     parser.add_argument('--show-data', action='store_true')
     parser.add_argument(
         '--cpu', action='store_true', help='force CPU usage')
+    parser.add_argument('--ngpu', help='number of GPUs to use')
     parser.add_argument(
         '--debug', action='store_true')
 
@@ -288,7 +326,11 @@ def main():
         sys.exit()
 
     if args.train:
-        model.train()
+        if args.ngpu:
+            logging.ingo('Using %s GPUs' % args.ngpu)
+            model.train_multi_gpu()
+        else:
+            model.train()
         model.evaluate()
 
     elif args.optimize:
