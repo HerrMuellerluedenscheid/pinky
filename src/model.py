@@ -38,6 +38,7 @@ class Model(Object):
             delete_if_exists(self.summary_outdir)
             delete_if_exists(self.outdir)
 
+        self.training_hooks = None
         self.devices = ['/device:GPU:0', '/device:GPU:1']
         self.tf_config = tf_config
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
@@ -55,15 +56,9 @@ class Model(Object):
         dataset = dataset.repeat(count=self.n_epochs)
         return dataset.prefetch(buffer_size=self.batch_size)
 
-    def generate_input(self):
-        ''' Generates data and labels. '''
-        dataset = self.generate_dataset()
-        return dataset.make_one_shot_iterator().get_next()
-
-    def generate_evaluation_input(self):
-        ''' Generatas evaluation data and labels.'''
+    def generate_eval_dataset(self):
+        ''' Generates evaluation data and labels.'''
         dataset = self.evaluation_data_generator.get_dataset()
-        # dataset = dataset.batch(self.batch_size)
         if self.shuffle_size:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         return dataset.make_one_shot_iterator().get_next()
@@ -160,15 +155,6 @@ class Model(Object):
         # loss = tf.Print(loss, [tf.train.get_global_step()], "global step ")
         variable_summaries(loss, 'training_loss')
 
-        # lossalternative= tf.losses.mean_squared_error(
-        #     labels,
-        #     predictions,
-        #     weights=1.0,
-        #     scope=None,
-        #     loss_collection=tf.GraphKeys.LOSSES,
-        #     reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS
-        # )
-
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
                     learning_rate=params.get('learning_rate', 1e-4))
@@ -178,9 +164,9 @@ class Model(Object):
             return tf.estimator.EstimatorSpec(
                     mode=mode,
                     loss=loss,
-                    train_op=train_op,)
-                    # make it work for multi GPU:
-                    # training_hooks=[self.get_summary_hook()])
+                    train_op=train_op,
+                    # TODO: make this work for multi GPU:
+                    training_hooks=self.training_hooks)
 
         elif mode == tf.estimator.ModeKeys.EVAL:
             return tf.estimator.EstimatorSpec(mode=mode, loss=loss)
@@ -194,12 +180,14 @@ class Model(Object):
 
     def train(self, params=None):
         params = params or {}
+        self.training_hooks = [self.get_summary_hook()]
 
         with self.sess as default:
             est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.outdir, params=params)
 
-            est.train(input_fn=self.generate_input)
+            est.train(input_fn=self.generate_dataset)
+            # est.train(input_fn=self.generate_input)
 
     def train_multi_gpu(self, params=None):
         params = params or {}
@@ -212,30 +200,6 @@ class Model(Object):
             )
             est.train(input_fn=self.generate_dataset)
 
-    # def train_multi_gpu_OLD(self, params=None):
-
-    #     params = params or {}
-    #     self.devices = []
-    #     distribution = tf.contrib.distribute.MirroredStrategy(
-    #         devices=self.devices,
-    #         # num_gpus=2,
-    #     )
-    #     with self.sess as default:
-    #         est = tf.estimator.Estimator(
-    #             model_fn=self.model, model_dir=self.outdir, params=params)
-
-    #         #est.train(input_fn=self.generate_input)
-
-    #         with distribution.scope():
-    #             merged_results = distribution.call_for_each_tower(
-    #                 est.train,
-    #                 input_fn=self.generate_input,
-
-    #             )
-
-    #             # soll eine Liste der ergebnisse der Tower sein
-    #             print(distribution.unwrap(merged_results))
-
     def evaluate(self, params=None):
         params = params or {}
         logging.info('====== start evaluation')
@@ -247,7 +211,7 @@ class Model(Object):
         with self.sess as default:
             est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.outdir, params=params)
-            return est.evaluate(input_fn=self.generate_evaluation_input, steps=5)
+            return est.evaluate(input_fn=self.generate_eval_dataset, steps=5)
 
     def optimize(self):
         if self.hyperparameter_optimizer is None:
