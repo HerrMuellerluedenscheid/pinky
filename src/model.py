@@ -145,9 +145,9 @@ class Model(Object):
         labels = tf.transpose(labels)
         errors = predictions - labels
 
-        variable_summaries(errors[0], 'error_x')
-        variable_summaries(errors[1], 'error_y')
-        variable_summaries(errors[2], 'error_z')
+        variable_summaries(tf.abs(errors[0]), 'error_abs_x')
+        variable_summaries(tf.abs(errors[1]), 'error_abs_y')
+        variable_summaries(tf.abs(errors[2]), 'error_abs_z')
 
         # loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=1, keepdims=False))
         # variable_summaries(loss_carthesian, 'training_loss')
