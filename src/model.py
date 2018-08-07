@@ -153,6 +153,7 @@ class Model(Object):
         # variable_summaries(loss_carthesian, 'training_loss')
         # loss = tf.reduce_mean(loss_carthesian)
         loss = tf.losses.mean_squared_error(labels, predictions)
+        tf.summary.scalar('RMSE', loss)
 
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
@@ -189,6 +190,7 @@ class Model(Object):
         params = params or {}
 
         with self.sess as default:
+
             est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.outdir, params=params)
 
