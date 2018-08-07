@@ -18,12 +18,13 @@ You can dump your examples to TFRecordDatasets to accelerate io operations:
 
 and use the newly created config file to run `--train`
 
+Invoke pinky with `--debug` to enable keep track of weight matrices in
+(tensorboard[https://www.tensorflow.org/guide/summaries_and_tensorboard].
 
 Tests
 -----
 
  - basic learning (synthetics, real data)
-   # TODO: split data -> training, evaluation
  - synthetics, layered cake, train with top and bottom layer containing events.
         Validate with events within middle layer
  - evaluation using 'unknown' velocity model
