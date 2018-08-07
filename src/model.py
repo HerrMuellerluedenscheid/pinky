@@ -12,6 +12,7 @@ from pyrocko.guts import Object, Float, Bool
 
 import logging
 import shutil
+import os
 
 logger = logging.getLogger('pinky.model')
 
@@ -154,7 +155,6 @@ class Model(Object):
         # loss = tf.reduce_mean(loss_carthesian)
         loss = tf.losses.mean_squared_error(labels, predictions)
         tf.summary.scalar('RMSE', loss)
-
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
                     learning_rate=params.get('learning_rate', 1e-4))
@@ -166,12 +166,11 @@ class Model(Object):
                     every_n_iter=10)
 
             return tf.estimator.EstimatorSpec(
-                    mode=mode,
-                    loss=loss,
+                    mode=mode, loss=loss,
                     train_op=train_op,
                     # TODO: make this work for multi GPU:
                     training_hooks=[
-                            self.get_summary_hook(),
+                            self.get_summary_hook('train'),
                             logging_hook,
                         ])
 
@@ -184,23 +183,43 @@ class Model(Object):
                     'mae_eval': tf.metrics.mean_absolute_error(
                 labels=labels, predictions=predictions, name='mae_eval')}
 
-            for k, v in metrics.items():
-                tf.summary.scalar(k, v[1])
+
+            with tf.name_scope('eval'):
+                for k, v in metrics.items():
+                    tf.summary.scalar(k, v[1])
 
             return tf.estimator.EstimatorSpec(
-                    mode=mode, loss=loss, eval_metric_ops=metrics)
+                    mode=mode, loss=loss, eval_metric_ops=metrics,
+                    evaluation_hooks=[self.get_summary_hook('eval')])
 
-    def get_summary_hook(self):
+    def get_summary_hook(self, subdir=''):
         return tf.train.SummarySaverHook(
             self.summary_nth_step,
-            output_dir=self.summary_outdir,
+            output_dir=os.path.join(self.summary_outdir, subdir),
             scaffold=tf.train.Scaffold(
                 summary_op=tf.summary.merge_all())
         )
 
     def train_and_evaluate(self, params=None):
         params = params or {}
+        with self.sess as default:
 
+            est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.outdir, params=params)
+
+            train_spec = tf.estimator.TrainSpec(
+                    input_fn=self.generate_dataset)
+
+            eval_spec = tf.estimator.EvalSpec(
+                    input_fn=self.generate_eval_dataset,
+                    steps=None)
+            tf.estimator.train_and_evaluate(est, train_spec, eval_spec)
+
+    def train(self, params=None):
+        '''Used by the optimizer.
+
+        Todo: refactor to optimizer'''
+        params = params or {}
         with self.sess as default:
 
             est = tf.estimator.Estimator(
