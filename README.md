@@ -36,3 +36,10 @@ Outlook
 
  - increase z error weight -> improve z estimates
 
+
+Notes
+-----
+
+ - `batch_norm` is super important. Without, learning will get stuck at approx.
+   500m x-error, y-error and z-error (in each domain!)
+
