@@ -86,7 +86,7 @@ class DataGeneratorBase(Object):
         '''
         return num.zeros(self.tensor_shape, dtype=num.float32)
 
-    def pack_examples(self, generator):
+    def pack_examples(self):
         '''Serialize Examples to strings.'''
         for ydata, label in self.generate():
             yield tf.train.Example(
@@ -111,8 +111,9 @@ class DataGeneratorBase(Object):
 
     def write(self, directory):
         '''Write example data to TFRecordDataset using `self.writer`.'''
+        logging.debug('writing TFRecordDataset: %s' % directory)
         writer = tf.python_io.TFRecordWriter(directory)
-        for ex in self.pack_examples(writer):
+        for ex in self.pack_examples():
             writer.write(ex.SerializeToString())
 
 
@@ -187,7 +188,9 @@ class PileData(DataGenerator):
     data_format = String.T(default='mseed')
     fn_markers = String.T()
     deltat_want = Float.T(optional=True)
-    shuffle = Bool.T(default=False)
+    sort_markers = Bool.T(default=False,
+            help= 'Sorting markers speeds up data io. Shuffled markers \
+            improve generalization')
 
     def setup(self):
         self.data_pile = pile.make_pile(
@@ -202,6 +205,10 @@ class PileData(DataGenerator):
         logging.debug('loading markers')
 
         markers = marker.load_markers(self.fn_markers)
+
+        if self.sort_markers:
+            markers.sort(key=lambda x: x.tmin)
+
         marker.associate_phases_to_events(markers)
 
         markers_by_nsl = {}
@@ -215,11 +222,6 @@ class PileData(DataGenerator):
 
         assert(len(markers_by_nsl) == 1)
         self.markers = list(markers_by_nsl.values())[0]
-
-        if self.shuffle:
-            random.shuffle(self.markers)
-        else:
-            self.markers.sort(key=lambda x: x.tmin)
 
         self.channels = list(self.data_pile.nslc_ids.keys())
         self.tensor_shape = (len(self.channels), self.n_samples_max)

@@ -46,8 +46,7 @@ class Model(Object):
         self.sess = tf.Session(config=tf_config)
 
         self.initializer = tf.truncated_normal_initializer(
-            mean=0.5, stddev=0.1)
-            #mean=0.0, stddev=0.1)
+            mean=0.1, stddev=0.1)
 
     def generate_dataset(self):
         dataset = self.data_generator.get_dataset()
@@ -60,8 +59,9 @@ class Model(Object):
     def generate_eval_dataset(self):
         ''' Generates evaluation data and labels.'''
         dataset = self.evaluation_data_generator.get_dataset()
-        dataset = dataset.batch(self.batch_size)
-        return dataset
+        if self.shuffle_size:
+            dataset = dataset.shuffle(buffer_size=self.shuffle_size)
+        return dataset.batch(self.batch_size)
 
     def time_axis_cnn(self, input, n_filters, kernel_height=None,
             kernel_width=1, name=None, training=False):
@@ -92,7 +92,7 @@ class Model(Object):
             input = tf.layers.max_pooling2d(
                 input,
                 pool_size=(kernel_height, kernel_width),
-                strides=(1, 2),
+                strides=(1, 1),
                 name=name+'max_pooling2d',
             )
 
@@ -109,7 +109,7 @@ class Model(Object):
 
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
-        n_filters = params.get('base_capacity', 8)
+        n_filters = params.get('base_capacity', 16)
         n_filters_factor = params.get('n_filters_factor', 2)
         kernel_width = params.get('kernel_width', 2)
         kernel_height = params.get('kernel_height', 2)
@@ -176,7 +176,19 @@ class Model(Object):
                         ])
 
         elif mode == tf.estimator.ModeKeys.EVAL:
-            return tf.estimator.EstimatorSpec(mode=mode, loss=loss)
+            metrics = {
+                    'RMSE': tf.metrics.root_mean_squared_error(
+                labels=labels, predictions=predictions, name='rmse_eval'),
+                    'mse_eval': tf.metrics.mean_squared_error(
+                labels=labels, predictions=predictions, name='mse_eval'),
+                    'mae_eval': tf.metrics.mean_absolute_error(
+                labels=labels, predictions=predictions, name='mae_eval')}
+
+            for k, v in metrics.items():
+                tf.summary.scalar(k, v[1])
+
+            return tf.estimator.EstimatorSpec(
+                    mode=mode, loss=loss, eval_metric_ops=metrics)
 
     def get_summary_hook(self):
         return tf.train.SummarySaverHook(
@@ -186,7 +198,7 @@ class Model(Object):
                 summary_op=tf.summary.merge_all())
         )
 
-    def train(self, params=None):
+    def train_and_evaluate(self, params=None):
         params = params or {}
 
         with self.sess as default:
@@ -195,6 +207,8 @@ class Model(Object):
                 model_fn=self.model, model_dir=self.outdir, params=params)
 
             est.train(input_fn=self.generate_dataset)
+            logging.info('====== start evaluation')
+            return est.evaluate(input_fn=self.generate_eval_dataset)
 
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...
@@ -215,19 +229,8 @@ class Model(Object):
                 config=run_config
             )
             est.train(input_fn=self.generate_dataset)
-
-    def evaluate(self, params=None):
-        params = params or {}
-        logging.info('====== start evaluation')
-        if self.evaluation_data_generator is None:
-            logging.warn(
-                'No evaluation data generator set! Can\'t evaluate')
-            return
-
-        with self.sess as default:
-            est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.outdir, params=params)
-            return est.evaluate(input_fn=self.generate_eval_dataset, steps=5)
+            logging.info('====== start evaluation')
+            return est.evaluate(input_fn=self.generate_eval_dataset)
 
     def optimize(self):
         if self.hyperparameter_optimizer is None:
@@ -277,13 +280,20 @@ def main():
 
     elif args.write_tfrecord_model:
         import uuid
-        fn_tfrecord = 'dump_%s.tfrecord' % str(uuid.uuid4())
-
+        model_id = uuid.uuid4()
+        fn_tfrecord = '%s_train.tfrecord' % str(model_id)
         tfrecord_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
         tfrecord_data_generator.tensor_shape = model.data_generator.tensor_shape
-
         model.data_generator.write(fn_tfrecord)
         model.data_generator = tfrecord_data_generator
+
+        if model.evaluation_data_generator is not None:
+            fn_tfrecord = '%s_eval.tfrecord' % str(model_id)
+            eval_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
+            eval_data_generator.tensor_shape = model.data_generator.tensor_shape
+            model.evaluation_data_generator.write(fn_tfrecord)
+            model.evaluation_data_generator = eval_data_generator
+
         model.dump(filename=args.write_tfrecord_model)
         logger.info('Wrote new model file: %s' % args.write_tfrecord_model)
 
@@ -314,8 +324,7 @@ def main():
             logging.info('Using %s GPUs' % args.ngpu)
             model.train_multi_gpu()
         else:
-            model.train()
-        model.evaluate()
+            model.train_and_evaluate()
 
     elif args.optimize:
         model.optimize()
