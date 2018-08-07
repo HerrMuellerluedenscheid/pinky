@@ -67,6 +67,35 @@ class DataGeneratorBase(Object):
     def output_shapes(self):
         return (self.tensor_shape, self.n_classes)
 
+    def generate(self):
+        record_iterator = tf.python_io.tf_record_iterator(
+                path=self.fn_tfrecord)
+        return self.unpack_examples(record_iterator)
+
+    def get_dataset(self):
+        return tf.data.Dataset.from_generator(
+            self.generate,
+            self.generate_output_types,
+            output_shapes=self.output_shapes)
+
+    def get_raw_data_chunk(self):
+        '''
+        Return an array of size (Nchannels x Nsamples_max).
+
+        When working with noisy data, replace this function.
+        '''
+        return num.zeros(self.tensor_shape, dtype=num.float32)
+
+    def pack_examples(self, generator):
+        '''Serialize Examples to strings.'''
+        for ydata, label in self.generate():
+            yield tf.train.Example(
+                features=tf.train.Features(
+                    feature={
+                        'data': _BytesFeature(ydata.tobytes()),
+                        'label': _BytesFeature(num.array(label, dtype=num.float32).tobytes()),
+                    }))
+
     def unpack_examples(self, record_iterator):
         '''Parse examples stored in TFRecordData to `tf.train.Example`'''
         for string_record in record_iterator:
@@ -79,27 +108,6 @@ class DataGeneratorBase(Object):
             chunk = chunk.reshape(self.tensor_shape)
             label = num.fromstring(label, dtype=num.float32)
             yield chunk, label
-
-    def generate(self):
-        record_iterator = tf.python_io.tf_record_iterator(
-                path=self.fn_tfrecord)
-        return self.unpack_examples(record_iterator)
-
-    def get_dataset(self):
-        return tf.data.Dataset.from_generator(
-            self.generate,
-            self.generate_output_types,
-            output_shapes=self.output_shapes)
-
-    def pack_examples(self, generator):
-        '''Serialize Examples to strings.'''
-        for ydata, label in self.generate():
-            yield tf.train.Example(
-                features=tf.train.Features(
-                    feature={
-                        'data': _BytesFeature(ydata.tobytes()),
-                        'label': _BytesFeature(num.array(label, dtype=num.float32).tobytes()),
-                    }))
 
     def write(self, directory):
         '''Write example data to TFRecordDataset using `self.writer`.'''
@@ -144,21 +152,6 @@ class DataGenerator(DataGeneratorBase):
             self.reference_target.lat, self.reference_target.lon,
             source.lat, source.lon)
         return (n, e, source.depth)
-
-    def get_raw_data_chunk(self):
-        '''
-        Return an array of size (Nchannels x Nsamples_max).
-
-        When working with noisy data, replace this function.
-        '''
-        return num.zeros(self.tensor_shape, dtype=num.float32)
-
-    def attach_graph(self, dataset, shape):
-        '''
-        Use this method to attach any preprocessing to be done in tensorflow
-        graph.
-        '''
-        return dataset
 
     def regularize_deltat(self, tr):
         '''Equalize sampling rates accross the data set according to sampling rate
