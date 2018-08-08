@@ -14,6 +14,7 @@ import logging
 import shutil
 import os
 
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('pinky.model')
 
 
@@ -44,25 +45,26 @@ class Model(Object):
         self.devices = ['/device:GPU:0', '/device:GPU:1']
         self.tf_config = tf_config
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
+        # self.debug = logging.getLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
 
         self.initializer = tf.truncated_normal_initializer(
             mean=0.1, stddev=0.1)
 
+    def generate_eval_dataset(self):
+        dataset = self.evaluation_data_generator.get_dataset()
+        dataset = dataset.batch(self.batch_size)
+        iterator = dataset.make_one_shot_iterator()
+        return iterator.get_next()
+
     def generate_dataset(self):
         dataset = self.data_generator.get_dataset()
-        dataset = dataset.batch(self.batch_size)
-        if self.shuffle_size:
+        if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         dataset = dataset.repeat(count=self.n_epochs)
-        return dataset.prefetch(buffer_size=self.batch_size)
-
-    def generate_eval_dataset(self):
-        ''' Generates evaluation data and labels.'''
-        dataset = self.evaluation_data_generator.get_dataset()
-        if self.shuffle_size:
-            dataset = dataset.shuffle(buffer_size=self.shuffle_size)
-        return dataset.batch(self.batch_size)
+        dataset = dataset.batch(self.batch_size)
+        iterator = dataset.make_one_shot_iterator()
+        return iterator.get_next()
 
     def time_axis_cnn(self, input, n_filters, kernel_height=None,
             kernel_width=1, name=None, training=False):
@@ -80,29 +82,30 @@ class Model(Object):
         if kernel_height is None:
             kernel_height = n_channels
 
-        with tf.variable_scope('conv_layer%s' %name):
-            input = tf.layers.conv2d(
-                inputs=input,
-                filters=n_filters,
-                kernel_size=(kernel_height, kernel_width),
-                activation=self.activation,
-                bias_initializer=self.initializer,
-                name=name+'conv2d')
-
-            input = tf.layers.batch_normalization(input, training=training)
-            input = tf.layers.max_pooling2d(
-                input,
-                pool_size=(kernel_height, kernel_width),
-                strides=(1, 1),
-                name=name+'max_pooling2d',
+        # with tf.variable_scope('conv_layer%s' %name):
+        input = tf.layers.conv2d(
+            inputs=input,
+            filters=n_filters,
+            kernel_size=(kernel_height, kernel_width),
+            activation=self.activation,
+            bias_initializer=self.initializer,
+            name=name+'conv2d',
             )
 
-            if self.debug:
-                # super expensive!!
-                logging.warn('Debug mode enables super expensive summaries.')
-                tf.summary.image(
-                    'post-%s' % name, tf.split(
-                        input, num_or_size_splits=n_filters, axis=-1)[0])
+        input = tf.layers.batch_normalization(input, training=training)
+        input = tf.layers.max_pooling2d(
+            input,
+            pool_size=(kernel_height, kernel_width),
+            strides=(1, 1),
+            name=name+'max_pooling2d',
+        )
+
+        if self.debug:
+            # super expensive!!
+            logging.warn('Debug mode enables super expensive summaries.')
+            tf.summary.image(
+                'post-%s' % name, tf.split(
+                    input, num_or_size_splits=n_filters, axis=-1)[0])
 
         return input
 
@@ -129,11 +132,11 @@ class Model(Object):
                     n_filters=int(n_filters),
                     kernel_height=kernel_height,
                     kernel_width=int(kernel_width + ilayer*kernel_width_factor),
-                    name='conv_%s' % ilayer, training=training)
+                    name='conv_%s' % ilayer)
 
         fc = tf.contrib.layers.flatten(input)
         fc = tf.layers.dense(fc, params.get('n_filters_dense', 32),
-                activation=self.activation)
+                name='dense', activation=self.activation,)
 
         dropout = params.get('dropout_rate', self.dropout_rate)
         if dropout is not None:
@@ -169,14 +172,16 @@ class Model(Object):
                     mode=mode, loss=loss,
                     train_op=train_op,
                     # TODO: make this work for multi GPU:
+                    evaluation_hooks=[self.get_summary_hook('eval')],
                     training_hooks=[
                             self.get_summary_hook('train'),
                             logging_hook,
                         ])
 
         elif mode == tf.estimator.ModeKeys.EVAL:
+
             metrics = {
-                    'RMSE': tf.metrics.root_mean_squared_error(
+                    'rmse_eval': tf.metrics.root_mean_squared_error(
                 labels=labels, predictions=predictions, name='rmse_eval'),
                     'mse_eval': tf.metrics.mean_squared_error(
                 labels=labels, predictions=predictions, name='mse_eval'),
@@ -213,6 +218,7 @@ class Model(Object):
             eval_spec = tf.estimator.EvalSpec(
                     input_fn=self.generate_eval_dataset,
                     steps=None)
+
             tf.estimator.train_and_evaluate(est, train_spec, eval_spec)
 
     def train(self, params=None):
@@ -225,6 +231,13 @@ class Model(Object):
             est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.outdir, params=params)
 
+            # New feature to test:
+            # evaluator = tf.estimator.InMemoryEvaluatorHook(
+            #     estimator=est,
+            #     input_fn=self.generate_dataset
+            #     )
+            # est.train(input_fn=self.generate_dataset, hooks=[evaluator])
+            
             est.train(input_fn=self.generate_dataset)
             logging.info('====== start evaluation')
             return est.evaluate(input_fn=self.generate_eval_dataset)
@@ -281,8 +294,9 @@ def main():
     args = parser.parse_args()
 
     if args.debug:
-        logger.setLevel(logging.DEBUG)
-        logger.debug('Debug level active')
+        logging.basicConfig(level=logging.DEBUG)
+        # logging.setLevel(logging.DEBUG)
+        logging.debug('Debug level active')
 
     if args.config:
         model = guts.load(filename=args.config)
@@ -314,10 +328,10 @@ def main():
             model.evaluation_data_generator = eval_data_generator
 
         model.dump(filename=args.write_tfrecord_model)
-        logger.info('Wrote new model file: %s' % args.write_tfrecord_model)
+        logging.info('Wrote new model file: %s' % args.write_tfrecord_model)
 
     elif args.from_tfrecord:
-        logger.info('Reading data from %s' % args.from_tfrecord)
+        logging.info('Reading data from %s' % args.from_tfrecord)
         model.data_generator = TFRecordData(fn_tfrecord=args.from_tfrecord)
 
     elif args.new_config:
@@ -344,6 +358,7 @@ def main():
             model.train_multi_gpu()
         else:
             model.train_and_evaluate()
+            # model.train()
 
     elif args.optimize:
         model.optimize()

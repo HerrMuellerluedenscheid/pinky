@@ -207,6 +207,7 @@ class PileData(DataGenerator):
         markers = marker.load_markers(self.fn_markers)
 
         if self.sort_markers:
+            print('XXXXXXXXXXXXXXXXXXXx sorting markers!!!')
             markers.sort(key=lambda x: x.tmin)
 
         marker.associate_phases_to_events(markers)
@@ -245,7 +246,8 @@ class PileData(DataGenerator):
     def generate(self):
         tr_len = self.n_samples_max * self.deltat_want
         nslc_to_index = {nslc: idx for idx, nslc in enumerate(self.channels)}
-        for m in self.markers:
+        for i_m, m in enumerate(self.markers):
+            logging.debug('processig marker %s / %s' % (i_m, len(markers)))
             event = m.get_event()
             if event is None:
                 logging.debug('No event: %s' % m)
