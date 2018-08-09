@@ -247,7 +247,7 @@ class PileData(DataGenerator):
         tr_len = self.n_samples_max * self.deltat_want
         nslc_to_index = {nslc: idx for idx, nslc in enumerate(self.channels)}
         for i_m, m in enumerate(self.markers):
-            logging.debug('processig marker %s / %s' % (i_m, len(markers)))
+            logging.debug('processig marker %s / %s' % (i_m, len(self.markers)))
             event = m.get_event()
             if event is None:
                 logging.debug('No event: %s' % m)
