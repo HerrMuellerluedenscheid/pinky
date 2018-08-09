@@ -1,4 +1,5 @@
 import os
+import shutil
 import tensorflow as tf
 from .util import delete_if_exists
 from skopt import gp_minimize
@@ -41,6 +42,7 @@ class Optimizer(Object):
         self.model = None
         self.result = None
         self.fn_result = self.extend_path('result.optmz')
+        self.best_loss = 9e99
         # self.dimensions = [
         #     to_skopt_real(self.learning_rate, 'learning_rate', 'log-uniform')]
         self.optimizer_defaults = [
@@ -50,7 +52,7 @@ class Optimizer(Object):
             ('kernel_height', 3),
             # ('kernel_width_factor', 2),
             ('n_filters_dense', 64),
-            ('n_layers', 2),
+            # ('n_layers', 2),
             ('dropout_rate', 0.1),
         ]
 
@@ -58,11 +60,11 @@ class Optimizer(Object):
                 Real(low=1e-6, high=1e-2, prior='log-uniform',
                     name='learning_rate'),
                 Integer(low=8, high=32, name='base_capacity'),
-                Integer(low=1, high=5, name='kernel_width'),
-                Integer(low=1, high=5, name='kernel_height'),
+                Integer(low=2, high=5, name='kernel_width'),
+                Integer(low=2, high=5, name='kernel_height'),
                 # Real(low=1, high=3, prior='uniform', name='kernel_width_factor'),
                 Integer(low=16, high=128, name='n_filters_dense'),
-                Integer(low=1, high=3, name='n_layers'),
+                # Integer(low=1, high=3, name='n_layers'),
                 Real(low=0., high=0.4, prior='uniform', name='dropout_rate'),
                 ]
 
@@ -94,9 +96,16 @@ class Optimizer(Object):
         self.model.outdir = self.log_dir_name(args)
         self.announce_test(args)
         try:
-            self.model.train(args)
+            # self.model.train(args)
             # self.model.train_multi_gpu(args)
-            return self.model.evaluate(args)['loss']
+            loss = self.model.train_and_evaluate(args)[0]['loss']
+            if loss < self.best_loss:
+                print('found a better loss at %s' % loss)
+                print('args: ', args)
+                self.best_loss = loss
+            else:
+                shutil.rmtree(self.model.outdir)
+            return loss
         except tf.errors.ResourceExhaustedError as e:
             return 9e9
             logging.warn(e)

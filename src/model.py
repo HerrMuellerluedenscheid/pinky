@@ -113,10 +113,10 @@ class Model(Object):
 
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
-        n_filters = params.get('base_capacity', 16)
+        n_filters = params.get('base_capacity', 26)
         n_filters_factor = params.get('n_filters_factor', 2)
-        kernel_width = params.get('kernel_width', 2)
-        kernel_height = params.get('kernel_height', 2)
+        kernel_width = params.get('kernel_width', 3)
+        kernel_height = params.get('kernel_height', 3)
         kernel_width_factor = params.get('kernel_width_factor', 1)
         self.activation = params.get('activation', tf.nn.relu)
         n_channels, n_samples = self.data_generator.tensor_shape
@@ -135,13 +135,14 @@ class Model(Object):
                     name='conv_%s' % ilayer)
 
         fc = tf.contrib.layers.flatten(input)
-        fc = tf.layers.dense(fc, params.get('n_filters_dense', 32),
+        # fc = tf.layers.dense(fc, params.get('n_filters_dense', 115),
+        fc = tf.layers.dense(fc, params.get('n_filters_dense', 100),
                 name='dense', activation=self.activation,)
 
         dropout = params.get('dropout_rate', self.dropout_rate)
         if dropout is not None:
             fc = tf.layers.dropout(
-                fc, rate=params['dropout_rate'], training=training)
+                fc, rate=dropout, training=training)
 
         predictions = tf.layers.dense(fc, self.data_generator.n_classes)
         variable_summaries(predictions, 'predictions')
@@ -157,10 +158,11 @@ class Model(Object):
         # variable_summaries(loss_carthesian, 'training_loss')
         # loss = tf.reduce_mean(loss_carthesian)
         loss = tf.losses.mean_squared_error(labels, predictions)
-        tf.summary.scalar('RMSE', loss)
+        tf.summary.scalar('loss', loss)
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
-                    learning_rate=params.get('learning_rate', 1e-4))
+                    # learning_rate=params.get('learning_rate', 1e-4))
+                    learning_rate=params.get('learning_rate', 0.0009))
             train_op = optimizer.minimize(
                     loss=loss, global_step=tf.train.get_global_step())
 
@@ -213,13 +215,14 @@ class Model(Object):
                 model_fn=self.model, model_dir=self.outdir, params=params)
 
             train_spec = tf.estimator.TrainSpec(
-                    input_fn=self.generate_dataset)
+                    input_fn=self.generate_dataset,
+                    max_steps=1500)
 
             eval_spec = tf.estimator.EvalSpec(
                     input_fn=self.generate_eval_dataset,
                     steps=None)
 
-            tf.estimator.train_and_evaluate(est, train_spec, eval_spec)
+            return tf.estimator.train_and_evaluate(est, train_spec, eval_spec)
 
     def train(self, params=None):
         '''Used by the optimizer.
@@ -295,7 +298,7 @@ def main():
 
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
-        # logging.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
         logging.debug('Debug level active')
 
     if args.config:
