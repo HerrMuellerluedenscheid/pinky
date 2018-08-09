@@ -1,5 +1,6 @@
 import matplotlib as mpl
 mpl.use('Agg')
+import matplotlib.pyplot as plt
 
 from .data import *
 from .tf_util import *
@@ -17,6 +18,27 @@ import os
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('pinky.model')
+
+
+fig = plt.figure()
+ax = fig.add_subplot(111)
+
+
+class DumpHook(tf.train.SessionRunHook):
+    def __init__(self, labels, predictions):
+        self.labels = labels
+        self.predictions = predictions
+
+    def begin(self):
+        pass
+
+  # def before_run(self, run_context):
+  #   return tf.train.SessionRunArgs(self.loss)  
+
+    def after_run(self, run_context, run_values):
+        loss_value = run_values.results
+        print(self.labels)
+        print(self.predictions)
 
 
 class Model(Object):
@@ -170,16 +192,17 @@ class Model(Object):
             logging_hook = tf.train.LoggingTensorHook(
                     {"loss": loss, "step": tf.train.get_global_step()},
                     every_n_iter=10)
-
+            dump_hook = DumpHook(labels, predictions)
             return tf.estimator.EstimatorSpec(
                     mode=mode, loss=loss,
                     train_op=train_op,
                     # TODO: make this work for multi GPU:
-                    evaluation_hooks=[self.get_summary_hook('eval')],
+                    evaluation_hooks=[
+			    dump_hook,
+                            self.get_summary_hook('eval'),],
                     training_hooks=[
                             self.get_summary_hook('train'),
-                            logging_hook,
-                        ])
+                            logging_hook,])
 
         elif mode == tf.estimator.ModeKeys.EVAL:
 
