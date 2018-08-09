@@ -313,6 +313,14 @@ class GFSwarmData(DataGenerator):
         sources = self.swarm.get_effective_sources()
         self.tensor_shape = (len(self.targets), self.n_samples_max)
 
+        # TODO: extend to generator*s*
+        # pseudo-code:
+        # for swarm in self.swarms:
+        #     response = swarm.engine.process(
+        #         sources=sources,
+        #         targets=self.targets)
+        #         [...] 
+
         response = self.swarm.engine.process(
             sources=sources,
             targets=self.targets)
