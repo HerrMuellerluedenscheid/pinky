@@ -7,6 +7,7 @@ from .util import delete_if_exists
 from .optimize import Optimizer
 
 import tensorflow as tf
+import tempfile
 from pyrocko import guts
 from pyrocko.guts import Object, Float, Bool
 
@@ -26,7 +27,7 @@ class Model(Object):
     dropout_rate = Float.T(optional=True)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
-    outdir = String.T(default='/tmp/dnn-seis')
+    outdir = String.T(default=tempfile.mkdtemp(prefix='pinky-'))
     auto_clear = Bool.T(default=True)
     summary_outdir= String.T(default='summary')
     summary_nth_step = Int.T(default=1)
