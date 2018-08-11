@@ -26,8 +26,8 @@ ax = fig.add_subplot(111)
 
 class DumpHook(tf.train.SessionRunHook):
     def __init__(self, labels, predictions):
-        self.labels = labels
-        self.predictions = predictions
+        self.saver = tf.train.Saver(labels, predictions)
+        self.session = session
 
     def begin(self):
         pass
@@ -36,9 +36,10 @@ class DumpHook(tf.train.SessionRunHook):
   #   return tf.train.SessionRunArgs(self.loss)  
 
     def after_run(self, run_context, run_values):
-        loss_value = run_values.results
+        # loss_value = run_values.results
         print(self.labels)
         print(self.predictions)
+        # self.saver.save(self.session, 'test-model', 
 
 
 class Model(Object):
@@ -50,7 +51,6 @@ class Model(Object):
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
     outdir = String.T(default=tempfile.mkdtemp(prefix='pinky-'))
-    auto_clear = Bool.T(default=True)
     summary_outdir= String.T(default='summary')
     summary_nth_step = Int.T(default=1)
     shuffle_size = Int.T(
@@ -60,34 +60,31 @@ class Model(Object):
     def __init__(self, tf_config=None, **kwargs):
         super().__init__(**kwargs)
 
-        if self.auto_clear:
-            delete_if_exists(self.summary_outdir)
-            delete_if_exists(self.outdir)
-
         self.training_hooks = None
         self.devices = ['/device:GPU:0', '/device:GPU:1']
         self.tf_config = tf_config
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
-        # self.debug = logging.getLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
 
         self.initializer = tf.truncated_normal_initializer(
             mean=0.1, stddev=0.1)
 
+    def clear(self):
+        ''' Delete summary and model directories.'''
+        delete_if_exists(self.summary_outdir)
+        delete_if_exists(self.outdir)
+
     def generate_eval_dataset(self):
         dataset = self.evaluation_data_generator.get_dataset()
         dataset = dataset.batch(self.batch_size)
-        iterator = dataset.make_one_shot_iterator()
-        return iterator.get_next()
+        return dataset
 
     def generate_dataset(self):
         dataset = self.data_generator.get_dataset()
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         dataset = dataset.repeat(count=self.n_epochs)
-        dataset = dataset.batch(self.batch_size)
-        iterator = dataset.make_one_shot_iterator()
-        return iterator.get_next()
+        return dataset.batch(self.batch_size)
 
     def time_axis_cnn(self, input, n_filters, kernel_height=None,
             kernel_width=1, name=None, training=False):
@@ -192,15 +189,15 @@ class Model(Object):
             logging_hook = tf.train.LoggingTensorHook(
                     {"loss": loss, "step": tf.train.get_global_step()},
                     every_n_iter=10)
-            dump_hook = DumpHook(labels, predictions)
+            # dump_hook = DumpHook(labels, predictions)
             return tf.estimator.EstimatorSpec(
                     mode=mode, loss=loss,
                     train_op=train_op,
                     # TODO: make this work for multi GPU:
                     evaluation_hooks=[
-			    dump_hook,
                             self.get_summary_hook('eval'),],
                     training_hooks=[
+			    # dump_hook,
                             self.get_summary_hook('train'),
                             logging_hook,])
 
@@ -214,7 +211,6 @@ class Model(Object):
                     'mae_eval': tf.metrics.mean_absolute_error(
                 labels=labels, predictions=predictions, name='mae_eval')}
 
-
             with tf.name_scope('eval'):
                 for k, v in metrics.items():
                     tf.summary.scalar(k, v[1])
@@ -222,6 +218,9 @@ class Model(Object):
             return tf.estimator.EstimatorSpec(
                     mode=mode, loss=loss, eval_metric_ops=metrics,
                     evaluation_hooks=[self.get_summary_hook('eval')])
+
+        elif mode == tf.estimator.ModeKeys.PREDICT:
+            ...
 
     def get_summary_hook(self, subdir=''):
         return tf.train.SummarySaverHook(
@@ -311,6 +310,8 @@ def main():
         help='read tfrecord')
     parser.add_argument('--write')
     parser.add_argument('--new-config')
+    parser.add_argument('--clear', help='delete remaints of former runs',
+            action='store_true')
     parser.add_argument('--show-data', action='store_true')
     parser.add_argument(
         '--cpu', action='store_true', help='force CPU usage')
@@ -328,6 +329,9 @@ def main():
     if args.config:
         model = guts.load(filename=args.config)
 
+    if args.clear:
+        model.clear()
+
     tf_config = None
     if args.cpu:
         tf_config = tf.ConfigProto(
@@ -337,6 +341,7 @@ def main():
     if args.show_data:
         from . import plot
         plot.show_data(model, shuffle=True)
+        plt.show()
 
     elif args.write_tfrecord_model:
         import uuid
@@ -344,13 +349,17 @@ def main():
         fn_tfrecord = '%s_train.tfrecord' % str(model_id)
         tfrecord_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
         tfrecord_data_generator.tensor_shape = model.data_generator.tensor_shape
+        tfrecord_data_generator.channels = model.data_generator.channels
+
         model.data_generator.write(fn_tfrecord)
         model.data_generator = tfrecord_data_generator
 
         if model.evaluation_data_generator is not None:
             fn_tfrecord = '%s_eval.tfrecord' % str(model_id)
             eval_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
-            eval_data_generator.tensor_shape = model.data_generator.tensor_shape
+            eval_data_generator.tensor_shape = model.evaluation_data_generator.tensor_shape
+            eval_data_generator.channels = model.evaluation_data_generator.channels
+
             model.evaluation_data_generator.write(fn_tfrecord)
             model.evaluation_data_generator = eval_data_generator
 
