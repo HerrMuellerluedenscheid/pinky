@@ -32,6 +32,7 @@ def show_data(model, shuffle=False):
     model.data_generator.shuffle = shuffle
     for i, (chunk, labels) in enumerate(
             model.data_generator.generate()):
+
         if i == n:
             break
 
@@ -45,5 +46,7 @@ def show_data(model, shuffle=False):
 
     adjust(fig)
     adjust(fig_w)
+    fig.savefig('pink_image.png')
+    fig_w.savefig('pink_waves.png')
 
     plt.show()
