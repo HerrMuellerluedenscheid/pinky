@@ -3,12 +3,14 @@
 import tensorflow as tf
 from pyrocko.io import save, load
 from pyrocko.model import load_stations
-from pyrocko.guts import Object, String, Int, Float, Tuple, Bool
+from pyrocko.guts import Object, String, Int, Float, Tuple, Bool, Dict, List
 from pyrocko.gui import marker
 from pyrocko.gf.seismosizer import Engine, Target, LocalEngine
 from pyrocko import orthodrome
 from pyrocko import pile
 from swarm import synthi, source_region
+from collections import defaultdict, OrderedDict
+from functools import lru_cache
 
 import logging
 import random
@@ -44,9 +46,48 @@ class WhiteNoise(Noise):
 
 
 class DataGeneratorBase(Object):
-    _shape = Tuple.T(2, Int.T(), optional=True)
+    _shape = Tuple.T(2, Int.T(), optional=True, help='(Don\'t modify)')
+    _channels =  List.T(Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
     fn_tfrecord = String.T(optional=True)
     n_classes = Int.T(default=3)
+    noise = Noise.T(optional=True, help='Add noise to your feature chunks')
+    station_dropout_rate = Float.T(default=0.,
+        help='Rate by which to mask all channels of station')
+
+    @property
+    def channels(self):
+        return self._channels
+
+    @channels.setter
+    def channels(self, v):
+        self._channels = v
+
+    @property
+    @lru_cache(maxsize=1)
+    def nsl_to_indices(self):
+        ''' Returns a dictionary which maps nsl codes to indexing arrays.'''
+        indices = defaultdict(list)
+        for nslc, index in self.nslc_to_index.items():
+            indices[nslc[:3]].append(index)
+
+        return indices
+
+    @property
+    @lru_cache(maxsize=1)
+    def nsl_indices(self):
+        ''' Returns a 2D array of indices of channels belonging to one station.'''
+        return [v for v in self.nsl_to_indices.values()]
+
+    @property
+    def nslc_to_index(self):
+        ''' Returns a dictionary which maps nslc codes to trace indices.'''
+        d = OrderedDict()
+        for idx, nslc in enumerate(self.channels):
+            d[nslc] = idx
+        items = ['%s : %s' % (k, v) for k, v in d.items()]
+        logging.debug('Setting nslc-to-index mapping:')
+        logging.debug('\n'.join(items))
+        return d
 
     @property
     def tensor_shape(self):
@@ -96,6 +137,23 @@ class DataGeneratorBase(Object):
                         'label': _BytesFeature(num.array(label, dtype=num.float32).tobytes()),
                     }))
 
+    def mask(self, chunk):
+        '''For data augmentation: Mask traces in chunks'''
+        indices = self.nsl_indices
+        a = num.random.random(len(indices))
+        i = num.where(a < self.station_dropout_rate)[0]
+        for ii in i:
+            chunk[indices[ii], :] = 0
+
+    def process_chunk(self, chunk):
+        '''Probably better move this to the tensorflow side for better
+        performance.'''
+        if self.noise is not None:
+            chunk += self.noise.get_chunk(chunk.shape)
+
+        self.mask(chunk)
+        return chunk
+
     def unpack_examples(self, record_iterator):
         '''Parse examples stored in TFRecordData to `tf.train.Example`'''
         for string_record in record_iterator:
@@ -107,7 +165,8 @@ class DataGeneratorBase(Object):
             chunk = num.fromstring(chunk, dtype=num.float32)
             chunk = chunk.reshape(self.tensor_shape)
             label = num.fromstring(label, dtype=num.float32)
-            yield chunk, label
+            # yield chunk, label
+            yield self.process_chunk(chunk), label
 
     def write(self, directory):
         '''Write example data to TFRecordDataset using `self.writer`.'''
@@ -129,7 +188,6 @@ class DataGenerator(DataGeneratorBase):
             lat=50.2331,
             lon=12.448,
             elevation=546))
-    noise = Noise.T(optional=True, help='Add noise to your feature chunks')
 
     highpass = Float.T(optional=True)
     lowpass = Float.T(optional=True)
@@ -207,7 +265,7 @@ class PileData(DataGenerator):
         markers = marker.load_markers(self.fn_markers)
 
         if self.sort_markers:
-            print('XXXXXXXXXXXXXXXXXXXx sorting markers!!!')
+            logger.info('sorting markers!')
             markers.sort(key=lambda x: x.tmin)
 
         marker.associate_phases_to_events(markers)
@@ -225,6 +283,7 @@ class PileData(DataGenerator):
         self.markers = list(markers_by_nsl.values())[0]
 
         self.channels = list(self.data_pile.nslc_ids.keys())
+        self.channels.sort()
         self.tensor_shape = (len(self.channels), self.n_samples_max)
 
     def check_inputs(self):
@@ -245,7 +304,8 @@ class PileData(DataGenerator):
 
     def generate(self):
         tr_len = self.n_samples_max * self.deltat_want
-        nslc_to_index = {nslc: idx for idx, nslc in enumerate(self.channels)}
+        nslc_to_index = self.nslc_to_index
+
         for i_m, m in enumerate(self.markers):
             logging.debug('processig marker %s / %s' % (i_m, len(self.markers)))
             event = m.get_event()
@@ -267,10 +327,7 @@ class PileData(DataGenerator):
                 indices = [nslc_to_index[tr.nslc_id] for tr in trs]
                 self.fit_data_into_chunk(trs, chunk, indices=indices, tref=m.tmin)
 
-                if self.noise is not None:
-                    chunk += self.noise.get_chunk(*self.tensor_shape)
-
-                yield chunk, self.extract_labels(event)
+                yield self.process_chunk(chunk), self.extract_labels(event)
 
 
 class GFSwarmData(DataGenerator):
@@ -331,7 +388,7 @@ class GFSwarmData(DataGenerator):
             if self.noise is not None:
                 chunk += self.noise.get_chunk(*self.tensor_shape)
 
-            yield chunk, self.extract_labels(source)
+            yield self.mask(chunk), self.extract_labels(source)
 
     @classmethod
     def get_example(cls):
