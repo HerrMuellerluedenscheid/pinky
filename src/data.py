@@ -189,12 +189,6 @@ class DataGenerator(DataGeneratorBase):
             lon=12.448,
             elevation=546))
 
-    highpass = Float.T(optional=True)
-    lowpass = Float.T(optional=True)
-
-    highpass_order = Int.T(default=4, optional=True)
-    lowpass_order = Int.T(default=4, optional=True)
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.setup()
@@ -221,6 +215,7 @@ class DataGenerator(DataGeneratorBase):
     def fit_data_into_chunk(self, traces, chunk, indices=None, tref=0):
         indices = indices or range(len(traces))
         for i, tr in zip(indices, traces):
+            tr.data = tr.ydata.astype(num.float)
 
             if self.absolute:
                 tr.data = num.abs(tr.data)
@@ -249,6 +244,13 @@ class PileData(DataGenerator):
     sort_markers = Bool.T(default=False,
             help= 'Sorting markers speeds up data io. Shuffled markers \
             improve generalization')
+
+    highpass = Float.T(optional=True)
+    lowpass = Float.T(optional=True)
+
+    highpass_order = Int.T(default=4, optional=True)
+    lowpass_order = Int.T(default=4, optional=True)
+
 
     def setup(self):
         self.data_pile = pile.make_pile(
@@ -302,9 +304,32 @@ class PileData(DataGenerator):
         elif tr.deltat - self.deltat_want < -EPSILON:
             tr.downsample_to(self.deltat_want)
 
+    def get_filter_function(self):
+        functions = []
+        if self.highpass is not None:
+            functions.append(lambda tr: tr.highpass(
+                corner=self.highpass,
+                order=self.highpass_order))
+        if self.lowpass is not None:
+            functions.append(lambda tr: tr.lowpass(
+                corner=self.lowpass,
+                order=self.lowpass_order))
+
+        def fn(t):
+            for f in functions:
+                f(t)
+
+        return fn
+
     def generate(self):
         tr_len = self.n_samples_max * self.deltat_want
         nslc_to_index = self.nslc_to_index
+
+        tpad = 0.
+        if self.highpass is not None:
+            tpad = 0.5 / self.highpass
+
+        filter_function = self.get_filter_function()
 
         for i_m, m in enumerate(self.markers):
             logging.debug('processig marker %s / %s' % (i_m, len(self.markers)))
@@ -314,15 +339,12 @@ class PileData(DataGenerator):
                 continue
 
             for trs in self.data_pile.chopper(
-                    tmin=m.tmin, tmax=m.tmin+tr_len, keep_current_files_open=True):
-
-                if not len(trs):
-                    logging.debug('No data at tmin=%s' % m.tmin)
-                    continue
+                    tmin=m.tmin-tpad, tmax=m.tmin+tr_len+tpad, keep_current_files_open=True):
 
                 for tr in trs:
-                    tr.data = tr.ydata.astype(num.float)
+                    filter_function(tr)
 
+                tr.chop(tr.tmin+tpad, tr.tmax-tpad)
                 chunk = self.get_raw_data_chunk()
                 indices = [nslc_to_index[tr.nslc_id] for tr in trs]
                 self.fit_data_into_chunk(trs, chunk, indices=indices, tref=m.tmin)
