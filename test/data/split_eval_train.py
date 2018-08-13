@@ -6,7 +6,8 @@ import random
 '''Split a marker file into a training and evaluation set.'''
 
 fn_markers = 'markers_phases_events_nkc_P.pf'
-split_rate_training = 0.75      # how much data to use for training
+fn_prefix = 'rate50'
+split_rate_training = 0.5      # how much data to use for training
 
 markers = load_markers(fn_markers)
 associate_phases_to_events(markers)
@@ -23,8 +24,8 @@ isplit = int(len(markers) * split_rate_training)
 fn_markers = 'markers_phases_events_nkc_P.pf'
 fn_out, suffix = fn_markers.rsplit('.', maxsplit=1)
 
-fn_train = '%s_train.%s' % (fn_out, suffix)
-fn_eval = '%s_eval.%s' % (fn_out, suffix)
+fn_train = '%s_%s_train.%s' % (fn_prefix, fn_out, suffix)
+fn_eval = '%s_%s_eval.%s' % (fn_prefix, fn_out, suffix)
 
 # markers.extend(event_markers)
 markers_train = markers[0: isplit]
