@@ -16,7 +16,7 @@ import logging
 import shutil
 import os
 
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('pinky.model')
 
 
@@ -44,6 +44,9 @@ class DumpHook(tf.train.SessionRunHook):
 
 class Model(Object):
 
+    name = String.T(default='unnamed',
+        help='Used to identify the model and runs in summy and checkpoint \
+            directory')
     hyperparameter_optimizer = Optimizer.T(optional=True)
     data_generator = DataGeneratorBase.T()
     evaluation_data_generator = DataGeneratorBase.T(optional=True)
@@ -69,10 +72,19 @@ class Model(Object):
         self.initializer = tf.truncated_normal_initializer(
             mean=0.1, stddev=0.1)
 
+    def extend_path(self, p):
+        return os.path.join(p, self.name)
+
+    def get_summary_outdir(self):
+        return self.extend_path(self.summary_outdir)
+
+    def get_outdir(self):
+        return self.extend_path(self.outdir)
+
     def clear(self):
         ''' Delete summary and model directories.'''
-        delete_if_exists(self.summary_outdir)
-        delete_if_exists(self.outdir)
+        delete_if_exists(self.get_summary_outdir())
+        delete_if_exists(self.get_outdir())
 
     def generate_eval_dataset(self):
         dataset = self.evaluation_data_generator.get_dataset()
@@ -106,8 +118,10 @@ class Model(Object):
         input = tf.layers.conv2d(
             inputs=input,
             filters=n_filters,
+            # padding='same',   # Test
             kernel_size=(kernel_height, kernel_width),
             activation=self.activation,
+            kernel_initializer=self.initializer,  # Test
             bias_initializer=self.initializer,
             name=name+'conv2d',
             )
@@ -122,7 +136,7 @@ class Model(Object):
 
         if self.debug:
             # super expensive!!
-            logging.warn('Debug mode enables super expensive summaries.')
+            logger.warn('Debug mode enables super expensive summaries.')
             tf.summary.image(
                 'post-%s' % name, tf.split(
                     input, num_or_size_splits=n_filters, axis=-1)[0])
@@ -225,7 +239,7 @@ class Model(Object):
     def get_summary_hook(self, subdir=''):
         return tf.train.SummarySaverHook(
             self.summary_nth_step,
-            output_dir=os.path.join(self.summary_outdir, subdir),
+            output_dir=os.path.join(self.get_summary_outdir(), subdir),
             scaffold=tf.train.Scaffold(
                 summary_op=tf.summary.merge_all())
         )
@@ -235,11 +249,11 @@ class Model(Object):
         with self.sess as default:
 
             est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.outdir, params=params)
+                model_fn=self.model, model_dir=self.get_outdir(), params=params)
 
             train_spec = tf.estimator.TrainSpec(
                     input_fn=self.generate_dataset,
-                    max_steps=1500)
+                    max_steps=2500)
 
             eval_spec = tf.estimator.EvalSpec(
                     input_fn=self.generate_eval_dataset,
@@ -255,7 +269,7 @@ class Model(Object):
         with self.sess as default:
 
             est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.outdir, params=params)
+                model_fn=self.model, model_dir=self.get_outdir(), params=params)
 
             # New feature to test:
             # evaluator = tf.estimator.InMemoryEvaluatorHook(
@@ -265,7 +279,7 @@ class Model(Object):
             # est.train(input_fn=self.generate_dataset, hooks=[evaluator])
             
             est.train(input_fn=self.generate_dataset)
-            logging.info('====== start evaluation')
+            logger.info('====== start evaluation')
             return est.evaluate(input_fn=self.generate_eval_dataset)
 
     def train_multi_gpu(self, params=None):
@@ -287,7 +301,7 @@ class Model(Object):
                 config=run_config
             )
             est.train(input_fn=self.generate_dataset)
-            logging.info('====== start evaluation')
+            logger.info('====== start evaluation')
             return est.evaluate(input_fn=self.generate_eval_dataset)
 
     def optimize(self):
@@ -308,7 +322,6 @@ def main():
         help='write data_generator out to FILENAME')
     parser.add_argument('--from-tfrecord', metavar='FILENAME',
         help='read tfrecord')
-    parser.add_argument('--write')
     parser.add_argument('--new-config')
     parser.add_argument('--clear', help='delete remaints of former runs',
             action='store_true')
@@ -318,13 +331,17 @@ def main():
     parser.add_argument('--ngpu', help='number of GPUs to use')
     parser.add_argument(
         '--debug', action='store_true')
+    parser.add_argument('--force', action='store_true')
 
     args = parser.parse_args()
 
     if args.debug:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
         logger.setLevel(logging.DEBUG)
         logging.debug('Debug level active')
+    else:
+        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+        logger.setLevel(logging.DEBUG)
 
     if args.config:
         model = guts.load(filename=args.config)
@@ -338,6 +355,7 @@ def main():
             device_count={'GPU': 0}
         )
 
+    logger.info('XXX')
     if args.show_data:
         from . import plot
         plot.show_data(model, shuffle=True)
@@ -347,6 +365,18 @@ def main():
         import uuid
         model_id = uuid.uuid4()
         fn_tfrecord = '%s_train.tfrecord' % str(model_id)
+
+        if os.path.isfile(args.write_tfrecord_model):
+            if args.force:
+                delete_candidate = guts.load(filename=args.write_tfrecord_model)
+                for g in [delete_candidate.evaluation_data_generator,
+                        delete_candidate.data_generator]:
+                    g.cleanup()
+                delete_if_exists(args.write_tfrecord_model)
+            else:
+                print('file %s exists. use --force to overwrite' % args.write_tfrecord_model)
+                sys.exit(0)
+
         tfrecord_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
         tfrecord_data_generator.tensor_shape = model.data_generator.tensor_shape
         tfrecord_data_generator.channels = model.data_generator.channels
@@ -364,10 +394,10 @@ def main():
             model.evaluation_data_generator = eval_data_generator
 
         model.dump(filename=args.write_tfrecord_model)
-        logging.info('Wrote new model file: %s' % args.write_tfrecord_model)
+        logger.info('Wrote new model file: %s' % args.write_tfrecord_model)
 
     elif args.from_tfrecord:
-        logging.info('Reading data from %s' % args.from_tfrecord)
+        logger.info('Reading data from %s' % args.from_tfrecord)
         model.data_generator = TFRecordData(fn_tfrecord=args.from_tfrecord)
 
     elif args.new_config:
@@ -390,7 +420,7 @@ def main():
 
     if args.train:
         if args.ngpu:
-            logging.info('Using %s GPUs' % args.ngpu)
+            logger.info('Using %s GPUs' % args.ngpu)
             model.train_multi_gpu()
         else:
             model.train_and_evaluate()
