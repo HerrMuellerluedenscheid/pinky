@@ -20,11 +20,14 @@ import glob
 import sys
 
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
+from .util import delete_if_exists
 
 pjoin = os.path.join
 EPSILON = 1E-4
 
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 # TODOS:
 # - remove 'double events'
 
@@ -33,7 +36,7 @@ class Noise(Object):
 
     def __init__(self, *args, **kwargs):
         super(Noise, self).__init__(*args, **kwargs)
-        logging.info('Applying noise to input data with level %s' % self.level)
+        logger.info('Applying noise to input data with level %s' % self.level)
 
     def get_chunk(self, n_channels, n_samples):
         ...
@@ -84,9 +87,9 @@ class DataGeneratorBase(Object):
         d = OrderedDict()
         for idx, nslc in enumerate(self.channels):
             d[nslc] = idx
-        items = ['%s : %s' % (k, v) for k, v in d.items()]
-        logging.debug('Setting nslc-to-index mapping:')
-        logging.debug('\n'.join(items))
+        items = ['%s : %s' % ('.'.join(k), v) for k, v in d.items()]
+        logger.debug('Setting nslc-to-index mapping:\n')
+        logger.debug('\n'.join(items))
         return d
 
     @property
@@ -95,6 +98,7 @@ class DataGeneratorBase(Object):
 
     @property
     def generate_output_types(self):
+        '''Return data types of features and labels'''
         return tf.float32, tf.float32
 
     @tensor_shape.setter
@@ -106,6 +110,9 @@ class DataGeneratorBase(Object):
 
     @property
     def output_shapes(self):
+        '''Return a tuple containing the shape of feature arrays and number of
+        labels.
+        '''
         return (self.tensor_shape, self.n_classes)
 
     def generate(self):
@@ -120,12 +127,11 @@ class DataGeneratorBase(Object):
             output_shapes=self.output_shapes)
 
     def get_raw_data_chunk(self):
-        '''
-        Return an array of size (Nchannels x Nsamples_max).
-
-        When working with noisy data, replace this function.
-        '''
-        return num.zeros(self.tensor_shape, dtype=num.float32)
+        '''Return an array of size (Nchannels x Nsamples_max) filled with
+        NANs.'''
+        empty_array = num.empty(self.tensor_shape, dtype=num.float32)
+        empty_array.fill(num.nan)
+        return empty_array
 
     def pack_examples(self):
         '''Serialize Examples to strings.'''
@@ -170,10 +176,13 @@ class DataGeneratorBase(Object):
 
     def write(self, directory):
         '''Write example data to TFRecordDataset using `self.writer`.'''
-        logging.debug('writing TFRecordDataset: %s' % directory)
+        logger.debug('writing TFRecordDataset: %s' % directory)
         writer = tf.python_io.TFRecordWriter(directory)
         for ex in self.pack_examples():
             writer.write(ex.SerializeToString())
+
+    def cleanup(self):
+        delete_if_exists(self.fn_tfrecord)
 
 
 class DataGenerator(DataGeneratorBase):
@@ -196,10 +205,6 @@ class DataGenerator(DataGeneratorBase):
     def setup(self):
         pass
 
-    @property
-    def output_shapes(self):
-        return (self.tensor_shape, self.n_classes)
-
     def extract_labels(self, source):
         n, e = orthodrome.latlon_to_ne(
             self.reference_target.lat, self.reference_target.lon,
@@ -215,24 +220,22 @@ class DataGenerator(DataGeneratorBase):
     def fit_data_into_chunk(self, traces, chunk, indices=None, tref=0):
         indices = indices or range(len(traces))
         for i, tr in zip(indices, traces):
-            tr.data = tr.ydata.astype(num.float)
-
-            if self.absolute:
-                tr.data = num.abs(tr.data)
-
-            data_len = len(tr.data)
+            data_len = len(tr.ydata)
             istart_trace = int((tr.tmin - tref) / tr.deltat)
             istart_array = max(istart_trace, 0)
             istart_trace = max(-istart_trace, 0)
             istop_array = istart_array + (data_len - 2* istart_trace)
 
-            ydata = tr.data[ \
+            ydata = tr.ydata[ \
                 istart_trace: min(data_len, self.n_samples_max-istart_array) \
                 + istart_trace]
-            chunk[i, istart_array: istart_array+ydata.shape[0]] += ydata
+            chunk[i, istart_array: istart_array+ydata.shape[0]] = ydata
 
-        chunk -= num.min(chunk)
-        chunk /= num.max(chunk)
+        i_mask = num.isnan(chunk)
+        i_unmask = num.logical_not(i_mask)
+        chunk[i_unmask] /= (num.nanmax(num.abs(chunk)) * 2.)
+        chunk[i_unmask] += 0.5
+        chunk[i_mask] = 0.
 
 
 class PileData(DataGenerator):
@@ -262,7 +265,7 @@ class PileData(DataGenerator):
         self.deltat_want = self.deltat_want or \
                 min(self.data_pile.deltats.keys())
         self.n_samples_max = int(self.sample_length/self.deltat_want)
-        logging.debug('loading markers')
+        logger.debug('loading markers')
 
         markers = marker.load_markers(self.fn_markers)
 
@@ -290,7 +293,7 @@ class PileData(DataGenerator):
 
     def check_inputs(self):
         if len(self.data_pile.deltats()) > 1:
-            logging.warn(
+            logger.warn(
                 'Different sampling rates in dataset. Preprocessing slow')
 
     def preprocess(self, tr):
@@ -305,6 +308,9 @@ class PileData(DataGenerator):
             tr.downsample_to(self.deltat_want)
 
     def get_filter_function(self):
+        '''Setup and return a function that takes applies high- and lowpass
+        filters to :py:class:`pyrocko.trace.Trace` instances.
+        '''
         functions = []
         if self.highpass is not None:
             functions.append(lambda tr: tr.highpass(
@@ -332,19 +338,24 @@ class PileData(DataGenerator):
         filter_function = self.get_filter_function()
 
         for i_m, m in enumerate(self.markers):
-            logging.debug('processig marker %s / %s' % (i_m, len(self.markers)))
+            logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
             event = m.get_event()
             if event is None:
-                logging.debug('No event: %s' % m)
+                logger.debug('No event: %s' % m)
                 continue
 
             for trs in self.data_pile.chopper(
-                    tmin=m.tmin-tpad, tmax=m.tmin+tr_len+tpad, keep_current_files_open=True):
+                    tmin=m.tmin-tpad, tmax=m.tmax+tr_len+tpad,
+                    keep_current_files_open=True):
 
                 for tr in trs:
+                    tr.ydata = tr.ydata.astype(num.float32)
+                    tr.ydata -= num.mean(tr.ydata)
                     filter_function(tr)
+                    tr.chop(tr.tmin+tpad, tr.tmax-tpad)
+                    if self.absolute:
+                        tr.ydata = num.abs(tr.ydata)
 
-                tr.chop(tr.tmin+tpad, tr.tmax-tpad)
                 chunk = self.get_raw_data_chunk()
                 indices = [nslc_to_index[tr.nslc_id] for tr in trs]
                 self.fit_data_into_chunk(trs, chunk, indices=indices, tref=m.tmin)
@@ -417,7 +428,7 @@ class GFSwarmData(DataGenerator):
         gf_engine = LocalEngine(
             use_config=True,
             store_superdirs=['/data/stores'],
-            # default_store_id='test_store'
+            default_store_id='test_store'
         )
 
         example_swarm = source_region.Swarm(
