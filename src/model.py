@@ -111,6 +111,7 @@ class Model(Object):
         '''
         _, n_channels, n_samples, _ = input.shape
 
+        logger.debug('input has shape %s' % input.shape)
         if kernel_height is None:
             kernel_height = n_channels
 
@@ -155,6 +156,7 @@ class Model(Object):
         self.activation = params.get('activation', tf.nn.relu)
         n_channels, n_samples = self.data_generator.tensor_shape
         input = tf.reshape(features, [-1, n_channels, n_samples,  1])
+
         if self.debug: 
             view = features[:3]
             view = tf.expand_dims(view, -1)
