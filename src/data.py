@@ -27,7 +27,7 @@ EPSILON = 1E-4
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 # TODOS:
 # - remove 'double events'
 
@@ -57,6 +57,13 @@ class DataGeneratorBase(Object):
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.setup()
+
+    def setup(self):
+        pass
+
     @property
     def channels(self):
         return self._channels
@@ -72,6 +79,10 @@ class DataGeneratorBase(Object):
         indices = defaultdict(list)
         for nslc, index in self.nslc_to_index.items():
             indices[nslc[:3]].append(index)
+
+        # needed?
+        for k in indices.keys():
+            indices[k] = num.array(indices[k])
 
         return indices
 
@@ -171,7 +182,6 @@ class DataGeneratorBase(Object):
             chunk = num.fromstring(chunk, dtype=num.float32)
             chunk = chunk.reshape(self.tensor_shape)
             label = num.fromstring(label, dtype=num.float32)
-            # yield chunk, label
             yield self.process_chunk(chunk), label
 
     def write(self, directory):
@@ -182,7 +192,33 @@ class DataGeneratorBase(Object):
             writer.write(ex.SerializeToString())
 
     def cleanup(self):
+        '''Remove remaining folders'''
         delete_if_exists(self.fn_tfrecord)
+
+
+class ChannelStackGenerator(DataGeneratorBase):
+    '''Stack summed absolute traces of all available channels of a station
+    provided by the `generator`.
+    '''
+    generator = DataGeneratorBase.T(help='The generator to be compressed')
+    _channels =  List.T(Tuple.T(3, String.T()), optional=True, help='(Don\'t modify)')
+
+    def setup(self):
+        self.channels = list(self.generator.nsl_to_indices.keys())
+        self.tensor_shape = (len(self.channels), self.generator.tensor_shape[1])
+
+    def generate(self):
+        index_mapping_in = self.generator.nsl_to_indices
+
+        d = OrderedDict()
+        for idx, nsl in enumerate(self.channels):
+            d[nsl] = idx
+
+        for feature, label in self.generator.generate():
+            new_chunk = self.get_raw_data_chunk()
+            for nsl, indices in index_mapping_in.items():
+                new_chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
+            yield new_chunk, label
 
 
 class DataGenerator(DataGeneratorBase):
@@ -197,13 +233,6 @@ class DataGenerator(DataGeneratorBase):
             lat=50.2331,
             lon=12.448,
             elevation=546))
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.setup()
-
-    def setup(self):
-        pass
 
     def extract_labels(self, source):
         n, e = orthodrome.latlon_to_ne(
