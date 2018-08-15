@@ -50,7 +50,7 @@ class Model(Object):
     hyperparameter_optimizer = Optimizer.T(optional=True)
     data_generator = DataGeneratorBase.T()
     evaluation_data_generator = DataGeneratorBase.T(optional=True)
-    dropout_rate = Float.T(optional=True)
+    dropout_rate = Float.T(default=0.1)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
     outdir = String.T(default=tempfile.mkdtemp(prefix='pinky-'))
@@ -130,7 +130,8 @@ class Model(Object):
         input = tf.layers.batch_normalization(input, training=training)
         input = tf.layers.max_pooling2d(
             input,
-            pool_size=(kernel_height, kernel_width),
+            pool_size=(2, 2),
+            # pool_size=(kernel_height, kernel_width),
             strides=(1, 1),
             name=name+'max_pooling2d',
         )
@@ -148,7 +149,7 @@ class Model(Object):
 
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
-        n_filters = params.get('base_capacity', 26)
+        n_filters = params.get('base_capacity', 32)
         n_filters_factor = params.get('n_filters_factor', 2)
         kernel_width = params.get('kernel_width', 3)
         kernel_height = params.get('kernel_height', 3)
@@ -172,7 +173,7 @@ class Model(Object):
 
         fc = tf.contrib.layers.flatten(input)
         # fc = tf.layers.dense(fc, params.get('n_filters_dense', 115),
-        fc = tf.layers.dense(fc, params.get('n_filters_dense', 100),
+        fc = tf.layers.dense(fc, params.get('n_filters_dense', 128),
                 name='dense', activation=self.activation,)
 
         dropout = params.get('dropout_rate', self.dropout_rate)
@@ -197,8 +198,8 @@ class Model(Object):
         tf.summary.scalar('loss', loss)
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
-                    # learning_rate=params.get('learning_rate', 1e-4))
-                    learning_rate=params.get('learning_rate', 0.0009))
+                    learning_rate=params.get('learning_rate', 1e-4))
+                    # learning_rate=params.get('learning_rate', 0.0009))
             train_op = optimizer.minimize(
                     loss=loss, global_step=tf.train.get_global_step())
 
@@ -255,7 +256,7 @@ class Model(Object):
 
             train_spec = tf.estimator.TrainSpec(
                     input_fn=self.generate_dataset,
-                    max_steps=2500)
+                    max_steps=5000)
 
             eval_spec = tf.estimator.EvalSpec(
                     input_fn=self.generate_eval_dataset,
@@ -320,7 +321,7 @@ def main():
     parser.add_argument('--config')
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--optimize', action='store_true')
-    parser.add_argument('--write-tfrecord-model', metavar='FILENAME',
+    parser.add_argument('--write-tfrecord', metavar='FILENAME',
         help='write data_generator out to FILENAME')
     parser.add_argument('--from-tfrecord', metavar='FILENAME',
         help='read tfrecord')
@@ -363,20 +364,21 @@ def main():
         plot.show_data(model, shuffle=True)
         plt.show()
 
-    elif args.write_tfrecord_model:
-        import uuid
-        model_id = uuid.uuid4()
+    elif args.write_tfrecord:
+        # import uuid
+        # model_id = uuid.uuid4()
+        model_id = args.write_tfrecord
         fn_tfrecord = '%s_train.tfrecord' % str(model_id)
 
-        if os.path.isfile(args.write_tfrecord_model):
+        if os.path.isfile(args.write_tfrecord):
             if args.force:
-                delete_candidate = guts.load(filename=args.write_tfrecord_model)
+                delete_candidate = guts.load(filename=args.write_tfrecord)
                 for g in [delete_candidate.evaluation_data_generator,
                         delete_candidate.data_generator]:
                     g.cleanup()
-                delete_if_exists(args.write_tfrecord_model)
+                delete_if_exists(args.write_tfrecord)
             else:
-                print('file %s exists. use --force to overwrite' % args.write_tfrecord_model)
+                print('file %s exists. use --force to overwrite' % args.write_tfrecord)
                 sys.exit(0)
 
         tfrecord_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
@@ -395,8 +397,9 @@ def main():
             model.evaluation_data_generator.write(fn_tfrecord)
             model.evaluation_data_generator = eval_data_generator
 
-        model.dump(filename=args.write_tfrecord_model)
-        logger.info('Wrote new model file: %s' % args.write_tfrecord_model)
+        model.dump(filename=args.write_tfrecord + '.config')
+        logger.info('Wrote new model file: %s' % (
+            args.write_tfrecord + '.config'))
 
     elif args.from_tfrecord:
         logger.info('Reading data from %s' % args.from_tfrecord)
