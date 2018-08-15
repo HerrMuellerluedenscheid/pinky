@@ -24,19 +24,22 @@ def show_data(model, shuffle=False):
     n = 9
     n_rows = 3
 
+    
+    boxstyle = dict(boxstyle='round', facecolor='white', alpha=0.5)
     fig, axs = plt.subplots(math.ceil(n/n_rows), n_rows)
     axs = flatten(axs)
 
     fig_w, axs_w = plt.subplots(math.ceil(n/n_rows), n_rows)
     axs_w = flatten(axs_w)
     model.data_generator.shuffle = shuffle
-    for i, (chunk, labels) in enumerate(
+    for i, (chunk, label) in enumerate(
             model.data_generator.generate()):
 
         if i == n:
             break
 
         axs[i].imshow(chunk, aspect='auto', cmap='gist_gray')
+        axs[i].text(0, 0, label, transform=axs[i].transAxes, bbox=boxstyle)
         n_channels, n_samples = chunk.shape
         xdata = num.arange(n_samples)
         for irow, row in enumerate(chunk):
