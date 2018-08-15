@@ -22,12 +22,13 @@ import sys
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
 from .util import delete_if_exists
 
+
 pjoin = os.path.join
 EPSILON = 1E-4
 
 
 logger = logging.getLogger(__name__)
-# logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 # TODOS:
 # - remove 'double events'
 
@@ -56,6 +57,8 @@ class DataGeneratorBase(Object):
     noise = Noise.T(optional=True, help='Add noise to your feature chunks')
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
+    imputation_method = String.T(default='zero', help='How to mask and fill \
+        gaps (options: zero | mean)')
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -80,7 +83,6 @@ class DataGeneratorBase(Object):
         for nslc, index in self.nslc_to_index.items():
             indices[nslc[:3]].append(index)
 
-        # needed?
         for k in indices.keys():
             indices[k] = num.array(indices[k])
 
@@ -151,16 +153,27 @@ class DataGeneratorBase(Object):
                 features=tf.train.Features(
                     feature={
                         'data': _BytesFeature(ydata.tobytes()),
-                        'label': _BytesFeature(num.array(label, dtype=num.float32).tobytes()),
+                        'label': _BytesFeature(num.array(
+                            label, dtype=num.float32).tobytes()),
                     }))
+
+    def imputation(self, chunk):
+        if self.imputation_method == 'zero':
+            return 0.
+        elif self.imputation_method == 'mean':
+            return num.nanmean(chunk)
+        else:
+            raise Exception('unknown imputation method: %s' % \
+                self.imputation_method)
 
     def mask(self, chunk):
         '''For data augmentation: Mask traces in chunks'''
         indices = self.nsl_indices
         a = num.random.random(len(indices))
         i = num.where(a < self.station_dropout_rate)[0]
+        imputation_value = self.imputation(chunk)
         for ii in i:
-            chunk[indices[ii], :] = 0
+            chunk[indices[ii], :] = imputation_value
 
     def process_chunk(self, chunk):
         '''Probably better move this to the tensorflow side for better
@@ -168,7 +181,12 @@ class DataGeneratorBase(Object):
         if self.noise is not None:
             chunk += self.noise.get_chunk(chunk.shape)
 
+        # fill gaps
+        chunk[num.isnan(chunk)] = self.imputation(chunk)
+
+        # mask data
         self.mask(chunk)
+
         return chunk
 
     def unpack_examples(self, record_iterator):
@@ -201,10 +219,10 @@ class ChannelStackGenerator(DataGeneratorBase):
     provided by the `generator`.
     '''
     generator = DataGeneratorBase.T(help='The generator to be compressed')
-    _channels =  List.T(Tuple.T(3, String.T()), optional=True, help='(Don\'t modify)')
 
     def setup(self):
-        self.channels = list(self.generator.nsl_to_indices.keys())
+        self.channels = [k + ('STACK', ) for k in
+                self.generator.nsl_to_indices.keys()]
         self.tensor_shape = (len(self.channels), self.generator.tensor_shape[1])
 
     def generate(self):
@@ -240,12 +258,6 @@ class DataGenerator(DataGeneratorBase):
             source.lat, source.lon)
         return (n, e, source.depth)
 
-    def regularize_deltat(self, tr):
-        '''Equalize sampling rates accross the data set according to sampling rate
-        set in `self.config`.'''
-        if abs(tr.deltat - self.effective_deltat)>0.0001:
-            tr.resample(self.effective_deltat)
-
     def fit_data_into_chunk(self, traces, chunk, indices=None, tref=0):
         indices = indices or range(len(traces))
         for i, tr in zip(indices, traces):
@@ -264,7 +276,6 @@ class DataGenerator(DataGeneratorBase):
         i_unmask = num.logical_not(i_mask)
         chunk[i_unmask] /= (num.nanmax(num.abs(chunk)) * 2.)
         chunk[i_unmask] += 0.5
-        chunk[i_mask] = 0.
 
 
 class PileData(DataGenerator):
@@ -450,7 +461,7 @@ class GFSwarmData(DataGenerator):
             if self.noise is not None:
                 chunk += self.noise.get_chunk(*self.tensor_shape)
 
-            yield self.mask(chunk), self.extract_labels(source)
+            yield self.process_chunk(chunk), self.extract_labels(source)
 
     @classmethod
     def get_example(cls):
