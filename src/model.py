@@ -149,8 +149,8 @@ class Model(Object):
 
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
-        n_filters = params.get('base_capacity', 32)
-        n_filters_factor = params.get('n_filters_factor', 2)
+        n_filters = params.get('base_capacity', 16)
+        n_filters_factor = params.get('n_filters_factor', 1.5)
         kernel_width = params.get('kernel_width', 3)
         kernel_height = params.get('kernel_height', 3)
         kernel_width_factor = params.get('kernel_width_factor', 1)
@@ -163,10 +163,11 @@ class Model(Object):
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
-        for ilayer in range(params.get('n_layers', 2)):
-            n_filters = n_filters * (ilayer+1) * n_filters_factor
+        for ilayer in range(params.get('n_layers', 3)):
+            n_filters = int(n_filters * n_filters_factor)
+            logger.debug('nfilters %s in layers %s' % (n_filters, ilayer))
             input = self.time_axis_cnn(input,
-                    n_filters=int(n_filters),
+                    n_filters=n_filters,
                     kernel_height=kernel_height,
                     kernel_width=int(kernel_width + ilayer*kernel_width_factor),
                     name='conv_%s' % ilayer)
