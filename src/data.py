@@ -32,21 +32,35 @@ logger.setLevel(logging.DEBUG)
 # TODOS:
 # - remove 'double events'
 
+
 class Noise(Object):
-    level = Float.T(default=1.)
+    level = Float.T(default=1., optional=True)
 
-    def __init__(self, *args, **kwargs):
-        super(Noise, self).__init__(*args, **kwargs)
-        logger.info('Applying noise to input data with level %s' % self.level)
-
-    def get_chunk(self, n_channels, n_samples):
-        ...
+    def __call__(self, chunk):
+        pass
 
 
 class WhiteNoise(Noise):
 
-    def get_chunk(self, n_channels, n_samples):
-        return num.random.random((n_channels, n_samples)).astype(num.float32) * self.level
+    def __call__(self, chunk):
+        chunk += num.random.random(chunk.shape) * self.level
+
+
+class Imputation(Object):
+    dummy = Float.T(optional=True)
+    def __call__(self, *args, **kwargs):
+        pass
+
+
+class ImputationZero(Imputation):
+    def __call__(self, chunk):
+        return 0.
+
+
+class ImputationMean(Imputation):
+
+    def __call__(self, chunk):
+        return num.nanmean(chunk).astype(num.float32)
 
 
 class DataGeneratorBase(Object):
@@ -54,10 +68,10 @@ class DataGeneratorBase(Object):
     _channels =  List.T(Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
     fn_tfrecord = String.T(optional=True)
     n_classes = Int.T(default=3)
-    noise = Noise.T(optional=True, help='Add noise to your feature chunks')
+    noise = Noise.T(default=Noise(), help='Add noise to feature')
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
-    imputation_method = String.T(default='zero', help='How to mask and fill \
+    imputation = Imputation.T(default=ImputationZero(), help='How to mask and fill \
         gaps (options: zero | mean)')
 
     def __init__(self, **kwargs):
@@ -157,15 +171,6 @@ class DataGeneratorBase(Object):
                             label, dtype=num.float32).tobytes()),
                     }))
 
-    def imputation(self, chunk):
-        if self.imputation_method == 'zero':
-            return 0.
-        elif self.imputation_method == 'mean':
-            return num.nanmean(chunk)
-        else:
-            raise Exception('unknown imputation method: %s' % \
-                self.imputation_method)
-
     def mask(self, chunk):
         '''For data augmentation: Mask traces in chunks'''
         indices = self.nsl_indices
@@ -178,14 +183,15 @@ class DataGeneratorBase(Object):
     def process_chunk(self, chunk):
         '''Probably better move this to the tensorflow side for better
         performance.'''
-        if self.noise is not None:
-            chunk += self.noise.get_chunk(chunk.shape)
 
         # fill gaps
         chunk[num.isnan(chunk)] = self.imputation(chunk)
 
         # mask data
         self.mask(chunk)
+
+        # add noise
+        self.noise(chunk)
 
         return chunk
 
