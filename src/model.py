@@ -70,7 +70,7 @@ class Model(Object):
         self.sess = tf.Session(config=tf_config)
 
         self.initializer = tf.truncated_normal_initializer(
-            mean=0.1, stddev=0.1)
+            mean=0.5, stddev=0.1)
 
     def extend_path(self, p):
         return os.path.join(p, self.name)
@@ -89,6 +89,8 @@ class Model(Object):
     def generate_eval_dataset(self):
         dataset = self.evaluation_data_generator.get_dataset()
         dataset = dataset.batch(self.batch_size)
+        if self.shuffle_size is not None:
+            dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         return dataset
 
     def generate_dataset(self):
@@ -119,7 +121,7 @@ class Model(Object):
         input = tf.layers.conv2d(
             inputs=input,
             filters=n_filters,
-            # padding='same',   # Test
+            padding='same',   # Test
             kernel_size=(kernel_height, kernel_width),
             activation=self.activation,
             kernel_initializer=self.initializer,  # Test

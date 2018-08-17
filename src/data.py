@@ -33,6 +33,25 @@ logger.setLevel(logging.DEBUG)
 # - remove 'double events'
 
 
+class Normalization(Object):
+    def __call__(self, chunk):
+        pass
+
+
+class NormalizeStd(Normalization):
+    '''Normalizes by dividing through the standard deviation'''
+    def __call__(self, chunk):
+        # save and subtract trace levels
+        trace_levels = num.nanmean(chunk, axis=1)
+        chunk -= trace_levels
+
+        # normalize
+        chunk /= num.std(chunk, axis=1)
+
+        # restore mean levels
+        chunk += trace_levels
+
+
 class Noise(Object):
     level = Float.T(default=1., optional=True)
 
@@ -47,7 +66,7 @@ class WhiteNoise(Noise):
 
 
 class Imputation(Object):
-    dummy = Float.T(optional=True)
+
     def __call__(self, *args, **kwargs):
         pass
 
@@ -69,6 +88,7 @@ class DataGeneratorBase(Object):
     fn_tfrecord = String.T(optional=True)
     n_classes = Int.T(default=3)
     noise = Noise.T(default=Noise(), help='Add noise to feature')
+    normalization = Normalization.T(default=Normalization(), optional=True)
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
     imputation = Imputation.T(default=ImputationZero(), help='How to mask and fill \
@@ -192,6 +212,8 @@ class DataGeneratorBase(Object):
 
         # add noise
         self.noise(chunk)
+
+        self.normalization(chunk)
 
         return chunk
 
