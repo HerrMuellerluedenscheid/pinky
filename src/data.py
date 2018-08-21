@@ -38,6 +38,9 @@ class Normalization(Object):
     def __call__(self, chunk):
         pass
 
+class NormalizeMax(Normalization):
+    def __call__(self, chunk):
+        chunk /= num.nanmax(chunk)
 
 class NormalizeStd(Normalization):
     '''Normalizes by dividing through the standard deviation'''
@@ -94,7 +97,7 @@ class DataGeneratorBase(Object):
     fn_tfrecord = String.T(optional=True)
     n_classes = Int.T(default=3)
     noise = Noise.T(default=Noise(), help='Add noise to feature')
-    normalization = Normalization.T(default=Normalization(), optional=True)
+    normalization = Normalization.T(default=NormalizeMax(), optional=True)
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
     imputation = Imputation.T(default=ImputationZero(), help='How to mask and fill \
@@ -459,7 +462,7 @@ class GFSwarmData(DataGenerator):
     fn_stations = String.T()
     swarm = source_region.Swarm.T()
     n_sources = Int.T(default=100)
-    onset_phase = String.T(default='p')
+    onset_phase = String.T(default='first(p|P)')
     quantity = String.T(default='velocity')
 
     def setup(self):
@@ -525,7 +528,7 @@ class SeismosizerData(DataGenerator):
     fn_targets = String.T(
             help='filename containing pyrocko.gf.seismosizer.Target instances')
     engine = LocalEngine.T()
-    onset_phase = String.T(default='p')
+    onset_phase = String.T(default='first(p|P)')
 
     def setup(self):
         self.sources = guts.load(filename=self.fn_sources)
@@ -555,8 +558,8 @@ class SeismosizerData(DataGenerator):
             
             for tr in traces:
                 self.preprocess(tr)
-
-            tref = min([self.store.t(self.onset_phase, (source.depth,
-                source.distance_to(t))) for t in self.targets])
+            arrivals = [self.store.t(self.onset_phase,
+                (source.depth, source.distance_to(t))) for t in self.targets]
+            tref = min([a for a in arrivals if a is not None])
             chunk = self.fit_data_into_chunk(traces, tref=tref+source.time)
             yield self.process_chunk(chunk), self.extract_labels(source)

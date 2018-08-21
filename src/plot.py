@@ -43,8 +43,10 @@ def show_data(model, shuffle=False):
             break
 
         axs[i].imshow(chunk, aspect='auto', cmap='gist_gray')
+        string = ' '.join([str(l) for l in label])
+        string += '\nminmax= %1.1f| %1.1f' %(num.min(chunk), num.max(chunk))
         axs[i].text(
-                0, 0, ' '.join([str(l) for l in label]), size=7,
+                0, 0, string, size=7,
                 transform=axs[i].transAxes, bbox=boxstyle)
 
         n_channels, n_samples = chunk.shape
