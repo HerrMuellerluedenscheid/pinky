@@ -19,19 +19,22 @@ def adjust(fig):
         left=0.1, right=0.99, top=0.98, bottom=0.02, wspace=0.02, hspace=0.07)
 
 
+def get_left_axs(axs_grid):
+    return [ax[0] for ax in axs_grid]
+
+
 def show_data(model, shuffle=False):
-    yscale = 3.
+    yscale = 10.
     n = 9
     n_rows = 3
-
+    figsize = (10, 8)
     boxstyle = dict(boxstyle='round', facecolor='white', alpha=0.7)
-    fig, axs = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=(10, 8))
-    bottom_axs = axs[-1]
-    left_axs = [ax[0] for ax in axs]
-    axs = flatten(axs)
+    fig, axs_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
+    bottom_axs = axs_grid[-1]
+    axs = flatten(axs_grid)
 
-    fig_w, axs_w = plt.subplots(math.ceil(n/n_rows), n_rows)
-    axs_w = flatten(axs_w)
+    fig_w, axs_w_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
+    axs_w = flatten(axs_w_grid)
     model.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
             model.data_generator.generate()):
@@ -47,7 +50,8 @@ def show_data(model, shuffle=False):
         n_channels, n_samples = chunk.shape
         xdata = num.arange(n_samples)
         for irow, row in enumerate(chunk):
-            axs_w[i].plot(xdata, irow+yscale*row, color='grey')
+            row -= num.mean(row)
+            axs_w[i].plot(xdata, irow+yscale*row, color='grey', linewidth=0.5)
 
     [clear_ax(ax) for ax in axs_w]
 
@@ -57,14 +61,18 @@ def show_data(model, shuffle=False):
         locs.append(i)
         labels.append('.'.join(nslc))
 
-    for ax in left_axs:
-        ax.set_yticks(locs)
-        ax.set_yticklabels(labels, size=7)
+    left_axs = []
+    for axs in (get_left_axs(x) for x in (axs_grid, axs_w_grid)):
+        for ax in axs:
+            ax.set_yticks(locs)
+            ax.set_yticklabels(labels, size=7)
+            left_axs.append(ax)
 
     for ax in axs:
         if ax in left_axs:
             continue
         ax.set_yticks([])
+
     adjust(fig)
     adjust(fig_w)
     fig.savefig('pink_image.pdf', dpi=400)
