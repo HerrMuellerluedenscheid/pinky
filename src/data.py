@@ -5,7 +5,7 @@ from pyrocko.io import save, load
 from pyrocko.model import load_stations
 from pyrocko.guts import Object, String, Int, Float, Tuple, Bool, Dict, List
 from pyrocko.gui import marker
-from pyrocko.gf.seismosizer import Engine, Target, LocalEngine
+from pyrocko.gf.seismosizer import Engine, Target, LocalEngine, Source
 from pyrocko import orthodrome
 from pyrocko import pile
 from swarm import synthi, source_region
@@ -213,6 +213,7 @@ class DataGeneratorBase(Object):
         # add noise
         self.noise(chunk)
 
+        # apply normalization
         self.normalization(chunk)
 
         return chunk
@@ -269,10 +270,11 @@ class ChannelStackGenerator(DataGeneratorBase):
 
 class DataGenerator(DataGeneratorBase):
 
+    '''Generate examples from data on hard drives.'''
     sample_length = Float.T(help='length [s] of data window')
-    fn_stations = String.T()
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
     effective_deltat = Float.T(optional=True)
+    tpad = Float.T(default=1., help='padding between p phase onset and data chunk start')
     reference_target = Target.T(
         default=Target(
             codes=('', 'NKC', '', 'SHZ'),
@@ -286,7 +288,17 @@ class DataGenerator(DataGeneratorBase):
             source.lat, source.lon)
         return (n, e, source.depth)
 
-    def fit_data_into_chunk(self, traces, chunk, indices=None, tref=0):
+    def fit_data_into_chunk(self, traces, indices=None, tref=0):
+        '''Fit all `traces` into a 2 demensional numpy array.
+        
+        :param traces: list of pyrocko.trace.Trace instances
+        :param indices: list of indices where the traces in `traces` are
+            supposed to be filled into the array. If this parameter is None
+            assumes that the order of traces will remain the same accross
+            iterations.
+        :param tref: absolute time where to chop the data chunk. Typically first
+            p phase onset'''
+        chunk = self.get_raw_data_chunk()
         indices = indices or range(len(traces))
         for i, tr in zip(indices, traces):
             data_len = len(tr.ydata)
@@ -304,10 +316,12 @@ class DataGenerator(DataGeneratorBase):
         i_unmask = num.logical_not(i_mask)
         chunk[i_unmask] /= (num.nanmax(num.abs(chunk)) * 2.)
         chunk[i_unmask] += 0.5
+        return chunk
 
 
 class PileData(DataGenerator):
     '''Data generator for locally saved data.'''
+    fn_stations = String.T()
     data_path = String.T()
     data_format = String.T(default='mseed')
     fn_markers = String.T()
@@ -417,26 +431,27 @@ class PileData(DataGenerator):
                     keep_current_files_open=True):
 
                 for tr in trs:
+
                     tr.ydata = tr.ydata.astype(num.float32)
                     tr.ydata -= num.mean(tr.ydata)
                     filter_function(tr)
-                    tr.chop(tr.tmin+tpad, tr.tmax-tpad)
+                    print('check padding')
+                    tr.chop(tr.tmin, tr.tmax)
                     if self.absolute:
                         tr.ydata = num.abs(tr.ydata)
 
-                chunk = self.get_raw_data_chunk()
                 indices = [nslc_to_index[tr.nslc_id] for tr in trs]
-                self.fit_data_into_chunk(trs, chunk, indices=indices, tref=m.tmin)
+                chunk = self.fit_data_into_chunk(trs, indices=indices, tref=m.tmin)
 
                 yield self.process_chunk(chunk), self.extract_labels(event)
 
 
 class GFSwarmData(DataGenerator):
+    fn_stations = String.T()
     swarm = source_region.Swarm.T()
     n_sources = Int.T(default=100)
     onset_phase = String.T(default='p')
     quantity = String.T(default='velocity')
-    tpad = Float.T(default=1., help='padding between p phase onset and data chunk start')
 
     def setup(self):
         stations = load_stations(self.fn_stations)
@@ -447,16 +462,16 @@ class GFSwarmData(DataGenerator):
         self.tensor_shape = (len(self.targets), self.n_samples_max)
 
     def make_data_chunk(self, source, results):
-        ydata_stacked = self.get_raw_data_chunk()
         tref = self.store.t(
             self.onset_phase, (
                 source.depth,
                 source.distance_to(self.reference_target))
             )
 
+        # what about tref at other locations
         tref += (source.time - self.tpad)
         traces = [result.trace for result in results]
-        self.fit_data_into_chunk(traces, ydata_stacked, tref=tref)
+        ydata_stacked = self.fit_data_into_chunk(traces, tref=tref)
 
         return ydata_stacked
 
@@ -468,27 +483,12 @@ class GFSwarmData(DataGenerator):
         return (n, e, source.depth)
 
     def generate(self):
-        sources = self.swarm.get_effective_sources()
-        self.tensor_shape = (len(self.targets), self.n_samples_max)
-
-        # TODO: extend to generator*s*
-        # pseudo-code:
-        # for swarm in self.swarms:
-        #     response = swarm.engine.process(
-        #         sources=sources,
-        #         targets=self.targets)
-        #         [...] 
-
         response = self.swarm.engine.process(
-            sources=sources,
+            sources=self.swarm.get_effective_sources(),
             targets=self.targets)
 
         for isource, source in enumerate(response.request.sources):
             chunk = self.make_data_chunk(source, response.results_list[isource])
-
-            if self.noise is not None:
-                chunk += self.noise.get_chunk(*self.tensor_shape)
-
             yield self.process_chunk(chunk), self.extract_labels(source)
 
     @classmethod
@@ -509,3 +509,37 @@ class GFSwarmData(DataGenerator):
             fn_stations='stations.pf', sample_length=10, swarm=example_swarm,
         )
 
+        
+class SeismosizerData(DataGenerator):
+    fn_sources = String.T(
+            help='filename containing pyrocko.gf.seismosizer.Source instances')
+    fn_targets = String.T(
+            help='filename containing pyrocko.gf.seismosizer.Target instances')
+    engine = LocalEngine.T()
+    onset_phase = String.T(default='p')
+
+    def setup(self):
+        self.sources = guts.load_all(filename=self.fn_sources)
+        self.targets = guts.load_all(filename=self.fn_targets)
+        store_ids = [t.store_id for t in self.targets]
+        store_id = set(store_ids)
+        assert(len(store_id) == 1, 'More than one store used. Not \
+                implemented yet')
+        store = self.engine.get_store(store_id)
+        self.n_samples_max = int(self.sample_length/store.config.deltat)
+        self.tensor_shape = (len(self.targets), self.n_samples_max)
+
+    def extract_labels(self, source):
+        return (source.north_shift, source.east_shift, source.depth)
+
+    def generate(self):
+        response = self.engine.process(
+            sources=self.sources,
+            targets=self.targets)
+
+        for isource, source in enumerate(response.request.sources):
+            traces = response.results_list[isource]
+            tref = self.store.t(self.onset_phase, (
+                    source.depth, source.distance_to(self.reference_target)))
+            chunk = self.fit_data_into_chunk(traces, tref=tref+source.time)
+            yield self.process_chunk(chunk), self.extract_labels(source)
