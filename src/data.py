@@ -3,6 +3,7 @@
 import tensorflow as tf
 from pyrocko.io import save, load
 from pyrocko.model import load_stations
+from pyrocko import guts
 from pyrocko.guts import Object, String, Int, Float, Tuple, Bool, Dict, List
 from pyrocko.gui import marker
 from pyrocko.gf.seismosizer import Engine, Target, LocalEngine, Source
@@ -20,7 +21,7 @@ import glob
 import sys
 
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
-from .util import delete_if_exists
+from .util import delete_if_exists, first_element
 
 
 pjoin = os.path.join
@@ -83,6 +84,11 @@ class ImputationMean(Imputation):
 
 
 class DataGeneratorBase(Object):
+    '''This is the base class for all generators.
+    
+    This class to dump and load data to/from all subclasses into
+    TFRecordDatasets.
+    '''
     _shape = Tuple.T(2, Int.T(), optional=True, help='(Don\'t modify)')
     _channels =  List.T(Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
     fn_tfrecord = String.T(optional=True)
@@ -262,10 +268,10 @@ class ChannelStackGenerator(DataGeneratorBase):
             d[nsl] = idx
 
         for feature, label in self.generator.generate():
-            new_chunk = self.get_raw_data_chunk()
+            chunk = self.get_raw_data_chunk()
             for nsl, indices in index_mapping_in.items():
-                new_chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
-            yield new_chunk, label
+                chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
+            yield chunk, label
 
 
 class DataGenerator(DataGeneratorBase):
@@ -275,12 +281,60 @@ class DataGenerator(DataGeneratorBase):
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
     effective_deltat = Float.T(optional=True)
     tpad = Float.T(default=1., help='padding between p phase onset and data chunk start')
+    deltat_want = Float.T(optional=True)
     reference_target = Target.T(
         default=Target(
             codes=('', 'NKC', '', 'SHZ'),
             lat=50.2331,
             lon=12.448,
             elevation=546))
+    highpass = Float.T(optional=True)
+    lowpass = Float.T(optional=True)
+
+    highpass_order = Int.T(default=4, optional=True)
+    lowpass_order = Int.T(default=4, optional=True)
+
+    def preprocess(self, tr):
+        '''Trace preprocessing
+
+        :param tr: pyrocko.tr.Trace object
+        
+        Demean, type casting to float32, filtering, adjust sampling rates.
+        '''
+        tr.ydata = tr.ydata.astype(num.float32)
+        tr.ydata -= num.mean(tr.ydata)
+
+        filter_function = self.get_filter_function()
+        filter_function(tr)
+
+        if self.deltat_want is not None:
+            if tr.deltat - self.deltat_want > EPSILON:
+                tr.resample(self.deltat_want)
+            elif tr.deltat - self.deltat_want < -EPSILON:
+                tr.downsample_to(self.deltat_want)
+
+    @lru_cache(maxsize=1)
+    def get_filter_function(self):
+        '''Setup and return a function that takes applies high- and lowpass
+        filters to :py:class:`pyrocko.trace.Trace` instances.
+        '''
+        functions = []
+        if self.highpass is not None:
+            functions.append(lambda tr: tr.highpass(
+                corner=self.highpass,
+                order=self.highpass_order))
+        if self.lowpass is not None:
+            functions.append(lambda tr: tr.lowpass(
+                corner=self.lowpass,
+                order=self.lowpass_order))
+
+        def fn(t):
+            for f in functions:
+                f(t)
+            if self.absolute:
+                t.ydata = num.abs(t.ydata)
+
+        return fn
 
     def extract_labels(self, source):
         n, e = orthodrome.latlon_to_ne(
@@ -300,6 +354,7 @@ class DataGenerator(DataGeneratorBase):
             p phase onset'''
         chunk = self.get_raw_data_chunk()
         indices = indices or range(len(traces))
+        tref = tref - self.tpad
         for i, tr in zip(indices, traces):
             data_len = len(tr.ydata)
             istart_trace = int((tr.tmin - tref) / tr.deltat)
@@ -307,9 +362,9 @@ class DataGenerator(DataGeneratorBase):
             istart_trace = max(-istart_trace, 0)
             istop_array = istart_array + (data_len - 2* istart_trace)
 
-            ydata = tr.ydata[ \
+            ydata = tr.ydata[
                 istart_trace: min(data_len, self.n_samples_max-istart_array) \
-                + istart_trace]
+                    + istart_trace]
             chunk[i, istart_array: istart_array+ydata.shape[0]] = ydata
 
         i_mask = num.isnan(chunk)
@@ -325,16 +380,9 @@ class PileData(DataGenerator):
     data_path = String.T()
     data_format = String.T(default='mseed')
     fn_markers = String.T()
-    deltat_want = Float.T(optional=True)
     sort_markers = Bool.T(default=False,
             help= 'Sorting markers speeds up data io. Shuffled markers \
             improve generalization')
-
-    highpass = Float.T(optional=True)
-    lowpass = Float.T(optional=True)
-
-    highpass_order = Int.T(default=4, optional=True)
-    lowpass_order = Int.T(default=4, optional=True)
 
 
     def setup(self):
@@ -346,7 +394,7 @@ class PileData(DataGenerator):
 
         self.deltat_want = self.deltat_want or \
                 min(self.data_pile.deltats.keys())
-        self.n_samples_max = int(self.sample_length/self.deltat_want)
+        self.n_samples_max = int((self.sample_length + self.tpad) / self.deltat_want)
         logger.debug('loading markers')
 
         markers = marker.load_markers(self.fn_markers)
@@ -378,37 +426,6 @@ class PileData(DataGenerator):
             logger.warn(
                 'Different sampling rates in dataset. Preprocessing slow')
 
-    def preprocess(self, tr):
-        '''Trace preprocessing
-
-        Ensures equal sampling rates
-        
-        :param tr: pyrocko.tr.Trace object'''
-        if tr.delta - self.deltat_want > EPSILON:
-            tr.resample(self.deltat_want)
-        elif tr.deltat - self.deltat_want < -EPSILON:
-            tr.downsample_to(self.deltat_want)
-
-    def get_filter_function(self):
-        '''Setup and return a function that takes applies high- and lowpass
-        filters to :py:class:`pyrocko.trace.Trace` instances.
-        '''
-        functions = []
-        if self.highpass is not None:
-            functions.append(lambda tr: tr.highpass(
-                corner=self.highpass,
-                order=self.highpass_order))
-        if self.lowpass is not None:
-            functions.append(lambda tr: tr.lowpass(
-                corner=self.lowpass,
-                order=self.lowpass_order))
-
-        def fn(t):
-            for f in functions:
-                f(t)
-
-        return fn
-
     def generate(self):
         tr_len = self.n_samples_max * self.deltat_want
         nslc_to_index = self.nslc_to_index
@@ -416,8 +433,6 @@ class PileData(DataGenerator):
         tpad = 0.
         if self.highpass is not None:
             tpad = 0.5 / self.highpass
-
-        filter_function = self.get_filter_function()
 
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
@@ -431,14 +446,8 @@ class PileData(DataGenerator):
                     keep_current_files_open=True):
 
                 for tr in trs:
-
-                    tr.ydata = tr.ydata.astype(num.float32)
-                    tr.ydata -= num.mean(tr.ydata)
-                    filter_function(tr)
+                    self.preprocess(tr)
                     print('check padding')
-                    tr.chop(tr.tmin, tr.tmax)
-                    if self.absolute:
-                        tr.ydata = num.abs(tr.ydata)
 
                 indices = [nslc_to_index[tr.nslc_id] for tr in trs]
                 chunk = self.fit_data_into_chunk(trs, indices=indices, tref=m.tmin)
@@ -458,7 +467,7 @@ class GFSwarmData(DataGenerator):
         self.targets = synthi.guess_targets_from_stations(
             stations, quantity=self.quantity)
         self.store = self.swarm.engine.get_store()  # uses default store
-        self.n_samples_max = int(self.sample_length/self.store.config.deltat)
+        self.n_samples_max = int((self.sample_length + self.tpad) / self.store.config.deltat)
         self.tensor_shape = (len(self.targets), self.n_samples_max)
 
     def make_data_chunk(self, source, results):
@@ -519,14 +528,17 @@ class SeismosizerData(DataGenerator):
     onset_phase = String.T(default='p')
 
     def setup(self):
-        self.sources = guts.load_all(filename=self.fn_sources)
-        self.targets = guts.load_all(filename=self.fn_targets)
+        self.sources = guts.load(filename=self.fn_sources)
+        self.targets = guts.load(filename=self.fn_targets)
+        self.channels = [t.codes for t in self.targets]
         store_ids = [t.store_id for t in self.targets]
         store_id = set(store_ids)
         assert(len(store_id) == 1, 'More than one store used. Not \
                 implemented yet')
-        store = self.engine.get_store(store_id)
-        self.n_samples_max = int(self.sample_length/store.config.deltat)
+        self.store = self.engine.get_store(store_id.pop())
+
+        dt = self.deltat_want or self.store.config.deltat
+        self.n_samples_max = int((self.sample_length + self.tpad) / dt)
         self.tensor_shape = (len(self.targets), self.n_samples_max)
 
     def extract_labels(self, source):
@@ -538,8 +550,13 @@ class SeismosizerData(DataGenerator):
             targets=self.targets)
 
         for isource, source in enumerate(response.request.sources):
-            traces = response.results_list[isource]
-            tref = self.store.t(self.onset_phase, (
-                    source.depth, source.distance_to(self.reference_target)))
+            traces = [x.trace.pyrocko_trace() for x in \
+                    response.results_list[isource]]
+            
+            for tr in traces:
+                self.preprocess(tr)
+
+            tref = min([self.store.t(self.onset_phase, (source.depth,
+                source.distance_to(t))) for t in self.targets])
             chunk = self.fit_data_into_chunk(traces, tref=tref+source.time)
             yield self.process_chunk(chunk), self.extract_labels(source)
