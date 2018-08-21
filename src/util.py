@@ -5,6 +5,13 @@ import logging
 logger = logging.getLogger()
 
 
+def first_element(x):
+    if len(x) <= 1:
+        return x[0]
+    elif len(x) > 1:
+        raise Exception('%s has more than one item' % x)
+
+
 def delete_if_exists(dir_or_file):
     '''Deletes `dir_or_file` if exists'''
     if os.path.exists(dir_or_file):
