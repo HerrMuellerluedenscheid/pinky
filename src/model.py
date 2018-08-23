@@ -70,7 +70,7 @@ class Model(Object):
         self.sess = tf.Session(config=tf_config)
 
         self.initializer = tf.truncated_normal_initializer(
-            mean=0.5, stddev=0.1)
+            mean=0.1, stddev=0.1)
 
     def extend_path(self, p):
         return os.path.join(p, self.name)
@@ -88,10 +88,9 @@ class Model(Object):
 
     def generate_eval_dataset(self):
         dataset = self.evaluation_data_generator.get_dataset()
-        dataset = dataset.batch(self.batch_size)
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
-        return dataset
+        return dataset.batch(self.batch_size)
 
     def generate_dataset(self):
         dataset = self.data_generator.get_dataset()
@@ -117,11 +116,10 @@ class Model(Object):
         if kernel_height is None:
             kernel_height = n_channels
 
-        # with tf.variable_scope('conv_layer%s' %name):
         input = tf.layers.conv2d(
             inputs=input,
             filters=n_filters,
-            padding='same',   # Test
+            # padding='same',   # Test
             kernel_size=(kernel_height, kernel_width),
             activation=self.activation,
             kernel_initializer=self.initializer,  # Test
@@ -129,7 +127,6 @@ class Model(Object):
             name=name+'conv2d',
             )
 
-        input = tf.layers.batch_normalization(input, training=training)
         input = tf.layers.max_pooling2d(
             input,
             pool_size=(2, 2),
@@ -137,7 +134,7 @@ class Model(Object):
             strides=(1, 1),
             name=name+'max_pooling2d',
         )
-
+        
         if self.debug:
             # super expensive!!
             logger.warn('Debug mode enables super expensive summaries.')
@@ -148,10 +145,9 @@ class Model(Object):
         return input
 
     def model(self, features, labels, mode, params):
-
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
-        n_filters = params.get('base_capacity', 16)
+        n_filters = params.get('base_capacity', 32)
         n_filters_factor = params.get('n_filters_factor', 1.5)
         kernel_width = params.get('kernel_width', 3)
         kernel_height = params.get('kernel_height', 3)
@@ -165,34 +161,55 @@ class Model(Object):
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
-        for ilayer in range(params.get('n_layers', 3)):
-            n_filters = int(n_filters * n_filters_factor)
-            logger.debug('nfilters %s in layers %s' % (n_filters, ilayer))
-            input = self.time_axis_cnn(input,
-                    n_filters=n_filters,
-                    kernel_height=kernel_height,
-                    kernel_width=int(kernel_width + ilayer*kernel_width_factor),
-                    name='conv_%s' % ilayer)
+        input = self.time_axis_cnn(input,
+                n_filters=32,
+                kernel_height=3,
+                kernel_width=3,
+                name='conv_%s' % 1,
+                training=training)
+        
+        input = self.time_axis_cnn(input,
+                n_filters=64,
+                kernel_height=3,
+                kernel_width=3,
+                name='conv_%s' % 2,
+                training=training)
+
+        #for ilayer in range(params.get('n_layers', 2)):
+        #    n_filters = int(n_filters * n_filters_factor)
+        #    logger.debug('nfilters %s in layers %s' % (n_filters, ilayer))
+        #    #if ilayer == 2:
+        #    #    input = self.time_axis_cnn(input,
+        #    #            n_filters=n_filters,
+        #    #            kernel_height=None,
+        #    #            kernel_width=int(kernel_width + ilayer*kernel_width_factor),
+        #    #            name='conv_%s' % ilayer)
+        #    #else:
+        #    input = self.time_axis_cnn(input,
+        #            n_filters=n_filters,
+        #            kernel_height=kernel_height,
+        #            kernel_width=int(kernel_width + ilayer*kernel_width_factor),
+        #            name='conv_%s' % ilayer)
 
         fc = tf.contrib.layers.flatten(input)
         # fc = tf.layers.dense(fc, params.get('n_filters_dense', 115),
-        fc = tf.layers.dense(fc, params.get('n_filters_dense', 128),
-                name='dense', activation=self.activation,)
+        fc = tf.layers.dense(fc, params.get('n_filters_dense', 64),
+            name='dense', activation=self.activation,)
 
         dropout = params.get('dropout_rate', self.dropout_rate)
         if dropout is not None:
             fc = tf.layers.dropout(
                 fc, rate=dropout, training=training)
+        # fc = tf.layers.batch_normalization(fc, training=training)
 
         predictions = tf.layers.dense(fc, self.data_generator.n_classes)
-        variable_summaries(predictions, 'predictions')
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
-        errors = predictions - labels
+        errors = tf.abs(predictions - labels)
 
-        variable_summaries(tf.abs(errors[0]), 'error_abs_x')
-        variable_summaries(tf.abs(errors[1]), 'error_abs_y')
-        variable_summaries(tf.abs(errors[2]), 'error_abs_z')
+        variable_summaries(errors[0], 'error_abs_x')
+        variable_summaries(errors[1], 'error_abs_y')
+        variable_summaries(errors[2], 'error_abs_z')
 
         # loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=1, keepdims=False))
         # variable_summaries(loss_carthesian, 'training_loss')
@@ -203,7 +220,9 @@ class Model(Object):
             optimizer = tf.train.AdamOptimizer(
                     learning_rate=params.get('learning_rate', 1e-4))
                     # learning_rate=params.get('learning_rate', 0.0009))
-            train_op = optimizer.minimize(
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                train_op = optimizer.minimize(
                     loss=loss, global_step=tf.train.get_global_step())
 
             logging_hook = tf.train.LoggingTensorHook(
@@ -211,7 +230,8 @@ class Model(Object):
                     every_n_iter=10)
             # dump_hook = DumpHook(labels, predictions)
             return tf.estimator.EstimatorSpec(
-                    mode=mode, loss=loss,
+                    mode=mode,
+                    loss=loss,
                     train_op=train_op,
                     # TODO: make this work for multi GPU:
                     evaluation_hooks=[
