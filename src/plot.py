@@ -23,6 +23,31 @@ def get_left_axs(axs_grid):
     return [ax[0] for ax in axs_grid]
 
 
+def plot_labels(labels, color, title, axs=None):
+    fig = None
+    if axs is None:
+        fig, axs = plt.subplots(1, 2)
+
+    nlabels = len(labels)
+    nlabel_components = len(labels[0])
+    labels_array = num.empty((nlabels, nlabel_components))
+    for i, l in enumerate(labels):
+        labels_array[i, :] = l
+
+    labels_array = num.transpose(labels_array)
+    axs[0].scatter(labels_array[0], labels_array[2], c=color, s=1., alpha=0.5)
+    axs[1].scatter(labels_array[1], labels_array[2], c=color, s=1., alpha=0.5,
+            label=title)
+
+    for ax in axs:
+        ax.set_aspect('equal')
+
+    fig = fig if fig is not None else plt.gcf()
+    plt.legend()
+
+    return fig, axs
+
+
 def show_data(model, shuffle=False):
     yscale = 10.
     n = 9
@@ -57,6 +82,11 @@ def show_data(model, shuffle=False):
 
     [clear_ax(ax) for ax in axs_w]
 
+    labels_eval = [label for _, label in
+            model.evaluation_data_generator.generate()]
+
+    labels_train = [label for _, label in model.data_generator.generate()]
+
     locs = []
     labels = []
     for nslc, i in model.data_generator.nslc_to_index.items():
@@ -77,7 +107,13 @@ def show_data(model, shuffle=False):
 
     adjust(fig)
     adjust(fig_w)
-    fig.savefig('pink_image.pdf', dpi=400)
-    fig_w.savefig('pink_waves.pdf', dpi=400)
+
+    fig_labels, axs_labels = plot_labels(labels_eval, 'red', title='eval')
+    fig_labels, axs_labels = plot_labels(labels_train, 'blue', title='train', axs=axs_labels)
+
+    fig_labels.savefig('pinky_labels.pdf', dpi=400)
+    fig.savefig('pinky_image.pdf', dpi=400)
+    fig_w.savefig('pinky_waves.pdf', dpi=400)
 
     plt.show()
+
