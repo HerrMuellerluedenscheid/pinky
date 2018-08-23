@@ -21,7 +21,7 @@ import glob
 import sys
 
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
-from .util import delete_if_exists, first_element
+from .util import delete_if_exists, first_element, filter_oob
 
 
 pjoin = os.path.join
@@ -38,19 +38,45 @@ class Normalization(Object):
     def __call__(self, chunk):
         pass
 
+
 class NormalizeMax(Normalization):
     def __call__(self, chunk):
         chunk /= num.nanmax(chunk)
+
+
+class NormalizeChannelMax(Normalization):
+    def __call__(self, chunk):
+        trace_levels = num.nanmean(chunk, axis=1)[:, num.newaxis]
+        chunk -= trace_levels
+        chunk /= (num.nanmax(num.abs(chunk), axis=1)[:, num.newaxis]) * 2.
+        chunk += trace_levels
+
 
 class NormalizeStd(Normalization):
     '''Normalizes by dividing through the standard deviation'''
     def __call__(self, chunk):
         # save and subtract trace levels
-        trace_levels = num.nanmean(chunk, axis=1)
+        # trace_levels = num.nanmean(chunk, axis=1)
+        trace_levels = num.nanmean(chunk)
         chunk -= trace_levels
 
         # normalize
-        chunk /= num.std(chunk, axis=1)
+        # chunk /= num.std(chunk, axis=1)
+        chunk /= num.std(chunk)
+
+        # restore mean levels
+        chunk += trace_levels
+
+
+class NormalizeChannelStd(Normalization):
+    '''Normalizes by dividing through the standard deviation'''
+    def __call__(self, chunk):
+        # save and subtract trace levels
+        trace_levels = num.nanmean(chunk, axis=1)[:, num.newaxis]
+        chunk -= trace_levels
+
+        # normalize
+        chunk /= num.std(chunk, axis=1)[:, num.newaxis]
 
         # restore mean levels
         chunk += trace_levels
@@ -144,8 +170,8 @@ class DataGeneratorBase(Object):
         for idx, nslc in enumerate(self.channels):
             d[nslc] = idx
         items = ['%s : %s' % ('.'.join(k), v) for k, v in d.items()]
-        logger.debug('Setting nslc-to-index mapping:\n')
-        logger.debug('\n'.join(items))
+        # logger.debug('Setting nslc-to-index mapping:\n')
+        # logger.debug('\n'.join(items))
         return d
 
     @property
@@ -268,7 +294,7 @@ class ChannelStackGenerator(DataGeneratorBase):
 
         d = OrderedDict()
         for idx, nsl in enumerate(self.channels):
-            d[nsl] = idx
+            d[nsl[:3]] = idx
 
         for feature, label in self.generator.generate():
             chunk = self.get_raw_data_chunk()
@@ -536,15 +562,19 @@ class SeismosizerData(DataGenerator):
         self.channels = [t.codes for t in self.targets]
         store_ids = [t.store_id for t in self.targets]
         store_id = set(store_ids)
-        assert(len(store_id) == 1, 'More than one store used. Not \
-                implemented yet')
+        assert len(store_id) == 1, 'More than one store used. Not \
+                implemented yet'
         self.store = self.engine.get_store(store_id.pop())
+
+        filter_oob(self.sources, self.targets, self.store.config)
 
         dt = self.deltat_want or self.store.config.deltat
         self.n_samples_max = int((self.sample_length + self.tpad) / dt)
         self.tensor_shape = (len(self.targets), self.n_samples_max)
 
     def extract_labels(self, source):
+        # print('labels n%s, e%s, z%s' % ( source.north_shift, source.east_shift,
+        # source.depth))
         return (source.north_shift, source.east_shift, source.depth)
 
     def generate(self):
