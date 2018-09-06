@@ -68,8 +68,8 @@ def show_data(model, shuffle=False):
             break
 
         axs[i].imshow(chunk, aspect='auto', cmap='gist_gray')
-        string = ' '.join([str(l) for l in label])
-        string += '\nminmax= %1.1f| %1.1f' %(num.min(chunk), num.max(chunk))
+        string = ' '.join([' %1.2f |'% l for l in label])
+        string += '\nminmax= %1.1f| %1.1f' %(num.nanmin(chunk), num.nanmax(chunk))
         axs[i].text(
                 0, 0, string, size=7,
                 transform=axs[i].transAxes, bbox=boxstyle)
@@ -82,10 +82,10 @@ def show_data(model, shuffle=False):
 
     [clear_ax(ax) for ax in axs_w]
 
-    labels_eval = [label for _, label in
-            model.evaluation_data_generator.generate()]
+    labels_eval = [label for label in
+            model.evaluation_data_generator.iter_labels()]
 
-    labels_train = [label for _, label in model.data_generator.generate()]
+    labels_train = [label for label in model.data_generator.iter_labels()]
 
     locs = []
     labels = []
@@ -108,8 +108,11 @@ def show_data(model, shuffle=False):
     adjust(fig)
     adjust(fig_w)
 
-    fig_labels, axs_labels = plot_labels(labels_eval, 'red', title='eval')
-    fig_labels, axs_labels = plot_labels(labels_train, 'blue', title='train', axs=axs_labels)
+    fig_labels, axs_labels = plot_labels(
+            labels_eval, 'red', title='eval')
+
+    fig_labels, axs_labels = plot_labels(
+            labels_train, 'blue', title='train', axs=axs_labels)
 
     fig_labels.savefig('pinky_labels.pdf', dpi=400)
     fig.savefig('pinky_image.pdf', dpi=400)

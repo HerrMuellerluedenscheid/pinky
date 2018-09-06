@@ -12,6 +12,7 @@ from pyrocko import pile
 from swarm import synthi, source_region
 from collections import defaultdict, OrderedDict
 from functools import lru_cache
+from pyrocko import util
 
 import logging
 import random
@@ -30,8 +31,6 @@ EPSILON = 1E-4
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-# TODOS:
-# - remove 'double events'
 
 
 class Normalization(Object):
@@ -40,8 +39,33 @@ class Normalization(Object):
 
 
 class NormalizeMax(Normalization):
+    '''Normalize the entire chunk by chunk's absolut maximum.'''
+    
     def __call__(self, chunk):
-        chunk /= num.nanmax(chunk)
+        chunk /= num.nanmax(num.abs(chunk))
+
+
+class NormalizeLog(Normalization):
+    def __call__(self, chunk):
+        mean = num.nanmean(chunk)
+        chunk -= mean 
+        sign = num.sign(chunk)
+
+        chunk[:] = num.log(num.abs(chunk)+EPSILON)
+        chunk *= sign
+        chunk += mean
+
+
+class NormalizeNthRoot(Normalization):
+    '''Normalize traces by their Nth root.
+    
+    Note: polarities get lost.'''
+    nth_root = Int.T(default=4)
+
+    def __call__(self, chunk):
+        chunk -= num.nanmean(chunk)
+        chunk[:] = num.power(num.abs(chunk), 1./self.nth_root)
+        chunk += num.nanmean(chunk)
 
 
 class NormalizeChannelMax(Normalization):
@@ -76,7 +100,9 @@ class NormalizeChannelStd(Normalization):
         chunk -= trace_levels
 
         # normalize
-        chunk /= num.std(chunk, axis=1)[:, num.newaxis]
+        nanstd = num.nanstd(chunk, axis=1)[:, num.newaxis]
+        nanstd[nanstd==0] = 1.
+        chunk /= nanstd
 
         # restore mean levels
         chunk += trace_levels
@@ -124,10 +150,16 @@ class DataGeneratorBase(Object):
     n_classes = Int.T(default=3)
     noise = Noise.T(default=Noise(), help='Add noise to feature')
     normalization = Normalization.T(default=NormalizeMax(), optional=True)
+
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
-    imputation = Imputation.T(default=ImputationZero(), help='How to mask and fill \
-        gaps (options: zero | mean)')
+
+    imputation = Imputation.T(
+        default=ImputationZero(),
+        help='How to mask and fill gaps')
+
+    blacklist = List.T(
+        String.T(), help='List blacklist patterns (may contain wild cards')
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -167,12 +199,21 @@ class DataGeneratorBase(Object):
     def nslc_to_index(self):
         ''' Returns a dictionary which maps nslc codes to trace indices.'''
         d = OrderedDict()
-        for idx, nslc in enumerate(self.channels):
-            d[nslc] = idx
-        items = ['%s : %s' % ('.'.join(k), v) for k, v in d.items()]
+        idx = 0
+        for nslc in self.channels:
+            if not util.match_nslc(self.blacklist, nslc):
+                d[nslc] = idx
+                idx += 1
+        return d
+        # items = ['%s : %s' % ('.'.join(k), v) for k, v in d.items()]
         # logger.debug('Setting nslc-to-index mapping:\n')
         # logger.debug('\n'.join(items))
-        return d
+        # return d
+
+    def reject_blacklisted(self, tr):
+        '''returns `False` if nslc codes of `tr` match any of the blacklisting
+        patters. Otherwise returns `True`'''
+        return not util.match_nslc(self.blacklist, tr.nslc_id)
 
     @property
     def tensor_shape(self):
@@ -196,6 +237,11 @@ class DataGeneratorBase(Object):
         labels.
         '''
         return (self.tensor_shape, self.n_classes)
+
+    def iter_labels(self):
+        '''Iterate through labels.'''
+        for _, label in self.generate():
+            yield label
 
     def generate(self):
         record_iterator = tf.python_io.tf_record_iterator(
@@ -309,7 +355,8 @@ class DataGenerator(DataGeneratorBase):
     sample_length = Float.T(help='length [s] of data window')
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
     effective_deltat = Float.T(optional=True)
-    tpad = Float.T(default=1., help='padding between p phase onset and data chunk start')
+    tpad = Float.T(default=0.,
+            help='padding between p phase onset and data chunk start')
     deltat_want = Float.T(optional=True)
     reference_target = Target.T(
         default=Target(
@@ -406,8 +453,8 @@ class DataGenerator(DataGeneratorBase):
 class PileData(DataGenerator):
     '''Data generator for locally saved data.'''
     fn_stations = String.T()
-    data_path = String.T()
-    data_format = String.T(default='mseed')
+    data_paths = List.T(String.T())
+    data_format = String.T(default='detect')
     fn_markers = String.T()
     sort_markers = Bool.T(default=False,
             help= 'Sorting markers speeds up data io. Shuffled markers \
@@ -416,16 +463,17 @@ class PileData(DataGenerator):
 
     def setup(self):
         self.data_pile = pile.make_pile(
-                self.data_path, fileformat=self.data_format)
+            self.data_paths, fileformat=self.data_format)
 
         if self.data_pile.is_empty():
             sys.exit('Data pile is empty!')
 
         self.deltat_want = self.deltat_want or \
                 min(self.data_pile.deltats.keys())
-        self.n_samples_max = int((self.sample_length + self.tpad) / self.deltat_want)
-        logger.debug('loading markers')
+        self.n_samples_max = int(
+                (self.sample_length + self.tpad) / self.deltat_want)
 
+        logger.debug('loading markers')
         markers = marker.load_markers(self.fn_markers)
 
         if self.sort_markers:
@@ -442,9 +490,12 @@ class PileData(DataGenerator):
             _ms = markers_by_nsl.get(key, [])
             _ms.append(m)
             markers_by_nsl[key] = _ms
-
+ 
         assert(len(markers_by_nsl) == 1)
+
+        # filter markers that do not have an event assigned:
         self.markers = list(markers_by_nsl.values())[0]
+        self.markers = [m for m in self.markers if m.get_event() is not None]
 
         self.channels = list(self.data_pile.nslc_ids.keys())
         self.channels.sort()
@@ -455,33 +506,43 @@ class PileData(DataGenerator):
             logger.warn(
                 'Different sampling rates in dataset. Preprocessing slow')
 
+    def extract_labels(self, marker):
+        source = marker.get_event()
+        n, e = orthodrome.latlon_to_ne(
+            self.reference_target.lat, self.reference_target.lon,
+            source.lat, source.lon)
+        return (n, e, source.depth)
+
+    def iter_labels(self):
+        for m in self.markers:
+            yield self.extract_labels(m)
+
     def generate(self):
         tr_len = self.n_samples_max * self.deltat_want
         nslc_to_index = self.nslc_to_index
 
-        tpad = 0.
+        tpad = self.tpad
         if self.highpass is not None:
-            tpad = 0.5 / self.highpass
+            tpad += 0.5 / self.highpass
 
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
-            event = m.get_event()
-            if event is None:
-                logger.debug('No event: %s' % m)
-                continue
 
             for trs in self.data_pile.chopper(
                     tmin=m.tmin-tpad, tmax=m.tmax+tr_len+tpad,
-                    keep_current_files_open=True):
+                    keep_current_files_open=True,
+                    want_incomplete=False,
+                    trace_selector=self.reject_blacklisted):
 
                 for tr in trs:
                     self.preprocess(tr)
-                    print('check padding')
 
                 indices = [nslc_to_index[tr.nslc_id] for tr in trs]
-                chunk = self.fit_data_into_chunk(trs, indices=indices, tref=m.tmin)
+                chunk = self.fit_data_into_chunk(
+                        trs, indices=indices, tref=m.tmin)
 
-                yield self.process_chunk(chunk), self.extract_labels(event)
+                yield self.process_chunk(chunk), self.extract_labels(m)
+
 
 
 class GFSwarmData(DataGenerator):

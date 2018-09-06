@@ -3,7 +3,23 @@ from pyrocko.guts import Object, Float, Int, String, Bool
 
 from pyrocko.pile import make_pile
 # from .data import DataGeneratorBase
+from .data import *
 import os
+
+
+class PinkyConfig(Object):
+    noise = Noise.T(default=Noise(), help='Add noise to feature')
+    normalization = Normalization.T(default=NormalizeMax(), optional=True)
+    station_dropout_rate = Float.T(default=0.,
+        help='Rate by which to mask all channels of station')
+    imputation = Imputation.T(default=ImputationZero(), help='How to mask and fill \
+        gaps (options: zero | mean)')
+
+    blacklist = List.T(
+        String.T(), help='List blacklist patterns (may contain wild cards')
+
+    stack_channels = Bool.T()
+    sample_length = Float.T()
 
 
 class PremadeGeneratorConfig(Object):

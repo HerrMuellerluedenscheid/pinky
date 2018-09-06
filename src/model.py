@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from .data import *
 from .tf_util import *
 from .util import delete_if_exists
+from . import plot
 from .optimize import Optimizer
 
 import tensorflow as tf
@@ -16,12 +17,7 @@ import logging
 import shutil
 import os
 
-# logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('pinky.model')
-
-
-fig = plt.figure()
-ax = fig.add_subplot(111)
 
 
 class DumpHook(tf.train.SessionRunHook):
@@ -39,7 +35,7 @@ class DumpHook(tf.train.SessionRunHook):
         # loss_value = run_values.results
         print(self.labels)
         print(self.predictions)
-        # self.saver.save(self.session, 'test-model', 
+        self.saver.save(self.session, 'test-model')
 
 
 class Model(Object):
@@ -47,12 +43,14 @@ class Model(Object):
     name = String.T(default='unnamed',
         help='Used to identify the model and runs in summy and checkpoint \
             directory')
+    config = config.PinkyConfig.T()
     hyperparameter_optimizer = Optimizer.T(optional=True)
     data_generator = DataGeneratorBase.T()
     evaluation_data_generator = DataGeneratorBase.T(optional=True)
     dropout_rate = Float.T(default=0.1)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
+    max_steps = Int.T(default=5000)
     outdir = String.T(default=tempfile.mkdtemp(prefix='pinky-'))
     summary_outdir= String.T(default='summary')
     summary_nth_step = Int.T(default=1)
@@ -64,10 +62,12 @@ class Model(Object):
         super().__init__(**kwargs)
 
         self.training_hooks = None
+        # self.saver = tf.train.Saver()
         self.devices = ['/device:GPU:0', '/device:GPU:1']
         self.tf_config = tf_config
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
+        self.est = None
 
         self.initializer = tf.truncated_normal_initializer(
             mean=0.1, stddev=0.1)
@@ -87,10 +87,8 @@ class Model(Object):
         delete_if_exists(self.get_outdir())
 
     def generate_eval_dataset(self):
-        dataset = self.evaluation_data_generator.get_dataset()
-        if self.shuffle_size is not None:
-            dataset = dataset.shuffle(buffer_size=self.shuffle_size)
-        return dataset.batch(self.batch_size)
+        return self.evaluation_data_generator.get_dataset().batch(
+                self.batch_size)
 
     def generate_dataset(self):
         dataset = self.data_generator.get_dataset()
@@ -124,7 +122,7 @@ class Model(Object):
             activation=self.activation,
             kernel_initializer=self.initializer,  # Test
             bias_initializer=self.initializer,
-            name=name+'conv2d',
+            name=name,
             )
 
         input = tf.layers.max_pooling2d(
@@ -172,7 +170,8 @@ class Model(Object):
                 n_filters=64,
                 kernel_height=3,
                 kernel_width=3,
-                name='conv_%s' % 2,
+                name='convxxx',
+                # name='conv_%s' % 2,
                 training=training)
 
         #for ilayer in range(params.get('n_layers', 2)):
@@ -203,6 +202,12 @@ class Model(Object):
         # fc = tf.layers.batch_normalization(fc, training=training)
 
         predictions = tf.layers.dense(fc, self.data_generator.n_classes)
+        tf.summary.tensor_summary('predictions', predictions)
+
+        # wastes a lot of memory?
+        dummy = tf.Variable((self.batch_size, self.data_generator.n_classes))
+        dummy = predictions
+        # predictions = tf.Print(dummy, [dummy])
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
         errors = tf.abs(predictions - labels)
@@ -214,7 +219,10 @@ class Model(Object):
         # loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=1, keepdims=False))
         # variable_summaries(loss_carthesian, 'training_loss')
         # loss = tf.reduce_mean(loss_carthesian)
+
         loss = tf.losses.mean_squared_error(labels, predictions)
+        # loss_ = loss.eval(session=self.sess)
+        # num.savetxt(loss_, 'xxx')
         tf.summary.scalar('loss', loss)
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(
@@ -228,7 +236,6 @@ class Model(Object):
             logging_hook = tf.train.LoggingTensorHook(
                     {"loss": loss, "step": tf.train.get_global_step()},
                     every_n_iter=10)
-            # dump_hook = DumpHook(labels, predictions)
             return tf.estimator.EstimatorSpec(
                     mode=mode,
                     loss=loss,
@@ -237,7 +244,6 @@ class Model(Object):
                     evaluation_hooks=[
                             self.get_summary_hook('eval'),],
                     training_hooks=[
-			    # dump_hook,
                             self.get_summary_hook('train'),
                             logging_hook,])
 
@@ -254,10 +260,14 @@ class Model(Object):
             with tf.name_scope('eval'):
                 for k, v in metrics.items():
                     tf.summary.scalar(k, v[1])
-
+            # vloss = tf.Variable(loss)
+            # restore_vars = [vloss]
             return tf.estimator.EstimatorSpec(
                     mode=mode, loss=loss, eval_metric_ops=metrics,
-                    evaluation_hooks=[self.get_summary_hook('eval')])
+                    evaluation_hooks=[self.get_summary_hook('eval'),
+                        # dump_hook
+                        ])
+            # saver.save(self.sess, '/tmp/testtt')
 
         elif mode == tf.estimator.ModeKeys.PREDICT:
             ...
@@ -274,18 +284,18 @@ class Model(Object):
         params = params or {}
         with self.sess as default:
 
-            est = tf.estimator.Estimator(
+            self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir(), params=params)
 
             train_spec = tf.estimator.TrainSpec(
                     input_fn=self.generate_dataset,
-                    max_steps=5000)
+                    max_steps=self.max_steps)
 
             eval_spec = tf.estimator.EvalSpec(
                     input_fn=self.generate_eval_dataset,
                     steps=None)
 
-            return tf.estimator.train_and_evaluate(est, train_spec, eval_spec)
+            return tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
 
     def train(self, params=None):
         '''Used by the optimizer.
@@ -294,7 +304,7 @@ class Model(Object):
         params = params or {}
         with self.sess as default:
 
-            est = tf.estimator.Estimator(
+            self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir(), params=params)
 
             # New feature to test:
@@ -304,13 +314,12 @@ class Model(Object):
             #     )
             # est.train(input_fn=self.generate_dataset, hooks=[evaluator])
             
-            est.train(input_fn=self.generate_dataset)
+            self.est.train(input_fn=self.generate_dataset)
             logger.info('====== start evaluation')
-            return est.evaluate(input_fn=self.generate_eval_dataset)
+            return self.est.evaluate(input_fn=self.generate_eval_dataset)
 
     def train_multi_gpu(self, params=None):
-        ''' Use multiple GPUs for training.  Buggy...
-        '''
+        ''' Use multiple GPUs for training.  Buggy...'''
         params = params or {}
         self.training_hooks = []
         # saver_hook = tf.train.CheckpointSaverHook()
@@ -335,6 +344,21 @@ class Model(Object):
             sys.exit('No hyperparameter optimizer defined in config file')
         self.hyperparameter_optimizer.optimize(self)
 
+    def show_kernels(self, layer_name):
+        '''Shows weight kernels of the given `layer_name`.'''
+        weights = self.est.get_variable_value('%s/kernel' % layer_name)
+        plot.show_kernels(weights[:, :, 0, :])
+
+    def restore(self):
+        # tf.reset_default_graph()
+        saver = tf.train.Saver()
+        self.train_and_evaluate()
+        with self.sess as sess:
+            # return tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
+            ckpt = tf.train.get_checkpoint_state(self.get_outdir())
+            x = saver.restore(sess, ckpt.model_checkpoint_path)
+            print(x)
+
 
 def main():
     import argparse
@@ -357,6 +381,7 @@ def main():
     parser.add_argument('--ngpu', help='number of GPUs to use')
     parser.add_argument(
         '--debug', action='store_true')
+    parser.add_argument('--restore', action='store_true')
     parser.add_argument('--force', action='store_true')
 
     args = parser.parse_args()
@@ -452,7 +477,10 @@ def main():
             model.train_multi_gpu()
         else:
             model.train_and_evaluate()
+            model.show_kernels('conv_1')
             # model.train()
+    elif args.restore:
+        model.restore()
 
     elif args.optimize:
         model.optimize()
