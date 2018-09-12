@@ -21,7 +21,6 @@ import os
 logger = logging.getLogger('pinky.model')
 
 
-
 class DumpHook(tf.train.SessionRunHook):
     def __init__(self, labels, predictions):
         self.saver = tf.train.Saver(labels, predictions)
@@ -43,7 +42,13 @@ class DumpHook(tf.train.SessionRunHook):
 class Layer(Object):
     name = String.T()
     n_filters = Int.T()
-    _activation = tf.nn.relu
+
+    activation = String.T(
+            default='relu', help='activation function of tf.nn')
+
+    def get_activation(self):
+        '''Return activation function from tensorflow.nn'''
+        return getattr(tf.nn, self.activation)
 
 
 class CNNLayer(Layer):
@@ -52,42 +57,32 @@ class CNNLayer(Layer):
     _initializer = tf.truncated_normal_initializer(
             mean=0.1, stddev=0.1)
 
-
     def chain(self, input, training=False):
-        '''
-        CNN along horizontal axis
-
-        :param n_filters: number of filters
-        :param kernel_height: convolution kernel size accross channels
-        :param kernel_width: convolution kernel size accross time axis
-
-        (Needs some debugging and checking)
-        '''
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
         if not self.kernel_height:
             kernel_height = n_channels
+        else:
+            kernel_height = self.kernel_height
 
         input = tf.layers.conv2d(
             inputs=input,
             filters=self.n_filters,
-            # padding='same',   # Test
-            kernel_size=(self.kernel_height, self.kernel_width),
-            activation=self._activation,
-            # kernel_initializer=self._initializer,  # Test
+            kernel_size=(kernel_height, self.kernel_width),
+            activation=self.get_activation(),
+            kernel_initializer=self._initializer,  # Test
             bias_initializer=self._initializer,
             name=self.name)
 
-        input = tf.layers.max_pooling2d(input, pool_size=(2, 2),
-            # pool_size=(kernel_height, kernel_width),
-            strides=(1, 1), name=self.name+'max_pooling2d')
+        input = tf.layers.max_pooling2d(input,
+            pool_size=(kernel_height, self.kernel_width),
+            strides=(1, 1), name=self.name+'maxpool')
         
         if logger.getEffectiveLevel() == logging.DEBUG:
-            logger.warn('Debug mode enables super expensive summaries.')
             tf.summary.image(
-                'post-%s' % name, tf.split(
-                    input, num_or_size_splits=n_filters, axis=-1)[0])
+                'post-%s' % self.name, tf.split(
+                    input, num_or_size_splits=self.n_filters, axis=-1)[0])
 
         return input
 
@@ -96,8 +91,8 @@ class DenseLayer(Layer):
 
     def chain(self, input, training=False):
         fc = tf.contrib.layers.flatten(input)
-        return tf.layers.dense(
-                fc, self.n_filters, name=self.name, activation=self._activation)
+        return tf.layers.dense(fc, self.n_filters, name=self.name,
+                activation=self.get_activation())
 
 
 class Model(Object):
@@ -105,6 +100,7 @@ class Model(Object):
     name = String.T(default='unnamed',
         help='Used to identify the model and runs in summy and checkpoint \
             directory')
+
     config = PinkyConfig.T()
     hyperparameter_optimizer = Optimizer.T(optional=True)
     dropout_rate = Float.T(default=0.1)
@@ -114,8 +110,10 @@ class Model(Object):
     outdir = String.T(default=tempfile.mkdtemp(prefix='pinky-'))
     summary_outdir= String.T(default='summary')
     summary_nth_step = Int.T(default=1)
+
     shuffle_size = Int.T(
         optional=True, help='if set, shuffle examples at given buffer size.')
+
     tf.logging.set_verbosity(tf.logging.INFO)
 
     layers = List.T(Layer.T(), help='Define the model')
@@ -128,8 +126,6 @@ class Model(Object):
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
         self.est = None
-
-        self.config.setup()
 
     def extend_path(self, p):
         return os.path.join(p, self.name)
@@ -156,82 +152,21 @@ class Model(Object):
         dataset = dataset.repeat(count=self.n_epochs)
         return dataset.batch(self.batch_size)
 
-    def time_axis_cnn(self, input, n_filters, kernel_height=None,
-            kernel_width=1, name=None, training=False):
-        '''
-        CNN along horizontal axis
-
-        :param n_filters: number of filters
-        :param kernel_height: convolution kernel size accross channels
-        :param kernel_width: convolution kernel size accross time axis
-
-        (Needs some debugging and checking)
-        '''
-        _, n_channels, n_samples, _ = input.shape
-
-        logger.debug('input has shape %s' % input.shape)
-        if kernel_height is None:
-            kernel_height = n_channels
-
     def model(self, features, labels, mode, params):
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
-
-        n_filters = params.get('base_capacity', 32)
-        n_filters_factor = params.get('n_filters_factor', 1.5)
-        kernel_width = params.get('kernel_width', 3)
-        kernel_height = params.get('kernel_height', 3)
-        kernel_width_factor = params.get('kernel_width_factor', 1)
-        # self.activation = params.get('activation', tf.nn.relu)
-        n_channels, n_samples = self.config.tensor_shape
-        input = tf.reshape(features, [-1, n_channels, n_samples,  1])
 
         if self.debug: 
             view = features[:3]
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
+        input = tf.reshape(features, [-1, *self.config.tensor_shape,  1])
         for layer in self.layers:
             input = layer.chain(input=input, training=training)
 
-        # input = self.time_axis_cnn(input,
-        #         n_filters=32,
-        #         kernel_height=3,
-        #         kernel_width=3,
-        #         name='conv_%s' % 1,
-        #         training=training)
-        # 
-        # input = self.time_axis_cnn(input,
-        #         n_filters=64,
-        #         kernel_height=5,
-        #         kernel_width=5,
-        #         name='conv_%s' % 2,
-        #         training=training)
-
-        #for ilayer in range(params.get('n_layers', 2)):
-        #    n_filters = int(n_filters * n_filters_factor)
-        #    logger.debug('nfilters %s in layers %s' % (n_filters, ilayer))
-        #    #if ilayer == 2:
-        #    #    input = self.time_axis_cnn(input,
-        #    #            n_filters=n_filters,
-        #    #            kernel_height=None,
-        #    #            kernel_width=int(kernel_width + ilayer*kernel_width_factor),
-        #    #            name='conv_%s' % ilayer)
-        #    #else:
-        #    input = self.time_axis_cnn(input,
-        #            n_filters=n_filters,
-        #            kernel_height=kernel_height,
-        #            kernel_width=int(kernel_width + ilayer*kernel_width_factor),
-        #            name='conv_%s' % ilayer)
-
-        # fc = tf.contrib.layers.flatten(input)
-        # # fc = tf.layers.dense(fc, params.get('n_filters_dense', 115),
-        # fc = tf.layers.dense(fc, params.get('n_filters_dense', 64),
-        #     name='dense', activation=self.activation,)
-        fc = input 
-        dropout = params.get('dropout_rate', self.dropout_rate)
         if dropout is not None:
             fc = tf.layers.dropout(
-                fc, rate=dropout, training=training)
+                input, rate=dropout, training=training)
         # fc = tf.layers.batch_normalization(fc, training=training)
 
         predictions = tf.layers.dense(fc, self.config.data_generator.n_classes)
