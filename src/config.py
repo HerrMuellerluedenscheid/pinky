@@ -1,80 +1,69 @@
 import tensorflow as tf
-from pyrocko.guts import Object, Float, Int, String, Bool
+from pyrocko.guts import Object, Float, Int, String, Bool, List, Tuple
 
 from pyrocko.pile import make_pile
-# from .data import DataGeneratorBase
-from .data import *
+from pyrocko.gf.seismosizer import Target
+
+from .data import Noise, Normalization, DataGeneratorBase, Imputation
+from .data import ImputationZero, ChannelStackGenerator
 import os
 
 
 class PinkyConfig(Object):
-    noise = Noise.T(default=Noise(), help='Add noise to feature')
-    normalization = Normalization.T(default=NormalizeMax(), optional=True)
-    station_dropout_rate = Float.T(default=0.,
-        help='Rate by which to mask all channels of station')
-    imputation = Imputation.T(default=ImputationZero(), help='How to mask and fill \
-        gaps (options: zero | mean)')
 
     blacklist = List.T(
         String.T(), help='List blacklist patterns (may contain wild cards')
 
-    stack_channels = Bool.T()
-    sample_length = Float.T()
+    stack_channels = Bool.T(default=False)
+    sample_length = Float.T(optional=True, help='Length in seconds. Not needed \
+        when using TFRecordData')
 
+    data_generator = DataGeneratorBase.T()
+    evaluation_data_generator = DataGeneratorBase.T()
+    _shape = Tuple.T(2, Int.T(), optional=True, help='(Don\'t modify)')
+    _channels =  List.T(Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
 
-class PremadeGeneratorConfig(Object):
-    window_length = Float.T(default=5.)
-    data_noise = String.T()
-    data_events = String.T()
-    out_fn = String.T()
-    target_deltat = Int.T(optional=True)
-    ref_lat = Float.T()
-    ref_lon = Float.T()
-    batch_size = Int.T()
-    n_classes = Int.T()
+    normalization = Normalization.T(default=Normalization(), optional=True)
 
-    def __init__(self, *args, **kwargs):
-        Object.__init__(self, *args, **kwargs)
-        self._writer = None
-        self._p1 = None
-        self._p2 = None
-        self._effective_deltat = None
+    imputation = Imputation.T(
+        default=ImputationZero(),
+        optional=True,
+        help='How to mask and fill gaps')
+    
+    reference_target = Target.T(optional=True)
 
-    def load_data(self):
-        if None in (self._p1, self._p2):
-            print('load data... should happen just once!')
-            self._p1 = make_pile(self.data_noise)
-            self._p2 = make_pile(self.data_events)
-            if (len(self._p1.deltats) > 1 or len(self._p2.deltats)>1) and self.target_deltat is None:
-                raise Exception('WARNING : target_deltat not defined and different sampling rates')
-        return self._p1, self._p2
+    n_classes = Int.T(default=3)
 
-    @property
-    def effective_deltat(self):
-        if self._effective_deltat is None:
-            if self.target_deltat is not None:
-                self._effective_deltat = self.target_deltat
-            else:
-                self._effective_deltat = list(self._p1.deltats.keys())[0]
-        return self._effective_deltat
+    def setup(self):
+        self.data_generator.set_config(self)
+        self.evaluation_data_generator.set_config(self)
+
+        if self.stack_channels:
+            self.data_generator = ChannelStackGenerator.from_generator(
+                    generator=self.data_generator)
+            self.evaluation_data_generator = ChannelStackGenerator.from_generator(
+                    generator=self.evaluation_data_generator)
+
+        # self.data_generator.set_config(self)
+        # self.evaluation_data_generator.set_config(self)
+        self.data_generator.setup()
+        self.evaluation_data_generator.setup()
 
     @property
-    def nslc_ids(self):
-        p1, p2 = self.load_data()
-        k1 = tuple(p1.nslc_ids.keys())
-        k2 = tuple(p2.nslc_ids.keys())
-        ids = list(set(k1 + k2))
-        return ids
+    def tensor_shape(self):
+        return self._shape
+
+    @tensor_shape.setter
+    def tensor_shape(self, v):
+        if v == self._shape:
+            return self._shape
+        else:
+            self._shape = v
 
     @property
-    def writer(self):
-        if self._writer is None:
-            outpath = self.out_fn.rsplit('/', 1)[0]
-            if not os.path.exists(outpath):
-                os.makedirs(outpath)                
-
-            self._writer = tf.python_io.TFRecordWriter(self.out_fn)
-        return self._writer
-
-
+    def output_shapes(self):
+        '''Return a tuple containing the shape of feature arrays and number of
+        labels.
+        '''
+        return (self.tensor_shape, self.n_classes)
 
