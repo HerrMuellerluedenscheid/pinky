@@ -6,6 +6,7 @@ from .data import *
 from .tf_util import *
 from .util import delete_if_exists
 from . import plot
+from .config import PinkyConfig
 from .optimize import Optimizer
 
 import tensorflow as tf
@@ -18,6 +19,7 @@ import shutil
 import os
 
 logger = logging.getLogger('pinky.model')
+
 
 
 class DumpHook(tf.train.SessionRunHook):
@@ -38,15 +40,73 @@ class DumpHook(tf.train.SessionRunHook):
         self.saver.save(self.session, 'test-model')
 
 
+class Layer(Object):
+    name = String.T()
+    n_filters = Int.T()
+    _activation = tf.nn.relu
+
+
+class CNNLayer(Layer):
+    kernel_width = Int.T()
+    kernel_height = Int.T(optional=True)
+    _initializer = tf.truncated_normal_initializer(
+            mean=0.1, stddev=0.1)
+
+
+    def chain(self, input, training=False):
+        '''
+        CNN along horizontal axis
+
+        :param n_filters: number of filters
+        :param kernel_height: convolution kernel size accross channels
+        :param kernel_width: convolution kernel size accross time axis
+
+        (Needs some debugging and checking)
+        '''
+        _, n_channels, n_samples, _ = input.shape
+
+        logger.debug('input shape %s' % input.shape)
+        if not self.kernel_height:
+            kernel_height = n_channels
+
+        input = tf.layers.conv2d(
+            inputs=input,
+            filters=self.n_filters,
+            # padding='same',   # Test
+            kernel_size=(self.kernel_height, self.kernel_width),
+            activation=self._activation,
+            # kernel_initializer=self._initializer,  # Test
+            bias_initializer=self._initializer,
+            name=self.name)
+
+        input = tf.layers.max_pooling2d(input, pool_size=(2, 2),
+            # pool_size=(kernel_height, kernel_width),
+            strides=(1, 1), name=self.name+'max_pooling2d')
+        
+        if logger.getEffectiveLevel() == logging.DEBUG:
+            logger.warn('Debug mode enables super expensive summaries.')
+            tf.summary.image(
+                'post-%s' % name, tf.split(
+                    input, num_or_size_splits=n_filters, axis=-1)[0])
+
+        return input
+
+
+class DenseLayer(Layer):
+
+    def chain(self, input, training=False):
+        fc = tf.contrib.layers.flatten(input)
+        return tf.layers.dense(
+                fc, self.n_filters, name=self.name, activation=self._activation)
+
+
 class Model(Object):
 
     name = String.T(default='unnamed',
         help='Used to identify the model and runs in summy and checkpoint \
             directory')
-    config = config.PinkyConfig.T()
+    config = PinkyConfig.T()
     hyperparameter_optimizer = Optimizer.T(optional=True)
-    data_generator = DataGeneratorBase.T()
-    evaluation_data_generator = DataGeneratorBase.T(optional=True)
     dropout_rate = Float.T(default=0.1)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
@@ -58,19 +118,18 @@ class Model(Object):
         optional=True, help='if set, shuffle examples at given buffer size.')
     tf.logging.set_verbosity(tf.logging.INFO)
 
+    layers = List.T(Layer.T(), help='Define the model')
+
     def __init__(self, tf_config=None, **kwargs):
         super().__init__(**kwargs)
 
-        self.training_hooks = None
-        # self.saver = tf.train.Saver()
         self.devices = ['/device:GPU:0', '/device:GPU:1']
         self.tf_config = tf_config
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
         self.est = None
 
-        self.initializer = tf.truncated_normal_initializer(
-            mean=0.1, stddev=0.1)
+        self.config.setup()
 
     def extend_path(self, p):
         return os.path.join(p, self.name)
@@ -87,11 +146,11 @@ class Model(Object):
         delete_if_exists(self.get_outdir())
 
     def generate_eval_dataset(self):
-        return self.evaluation_data_generator.get_dataset().batch(
+        return self.config.evaluation_data_generator.get_dataset().batch(
                 self.batch_size)
 
     def generate_dataset(self):
-        dataset = self.data_generator.get_dataset()
+        dataset = self.config.data_generator.get_dataset()
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         dataset = dataset.repeat(count=self.n_epochs)
@@ -114,34 +173,6 @@ class Model(Object):
         if kernel_height is None:
             kernel_height = n_channels
 
-        input = tf.layers.conv2d(
-            inputs=input,
-            filters=n_filters,
-            # padding='same',   # Test
-            kernel_size=(kernel_height, kernel_width),
-            activation=self.activation,
-            kernel_initializer=self.initializer,  # Test
-            bias_initializer=self.initializer,
-            name=name,
-            )
-
-        input = tf.layers.max_pooling2d(
-            input,
-            pool_size=(2, 2),
-            # pool_size=(kernel_height, kernel_width),
-            strides=(1, 1),
-            name=name+'max_pooling2d',
-        )
-        
-        if self.debug:
-            # super expensive!!
-            logger.warn('Debug mode enables super expensive summaries.')
-            tf.summary.image(
-                'post-%s' % name, tf.split(
-                    input, num_or_size_splits=n_filters, axis=-1)[0])
-
-        return input
-
     def model(self, features, labels, mode, params):
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
@@ -150,8 +181,8 @@ class Model(Object):
         kernel_width = params.get('kernel_width', 3)
         kernel_height = params.get('kernel_height', 3)
         kernel_width_factor = params.get('kernel_width_factor', 1)
-        self.activation = params.get('activation', tf.nn.relu)
-        n_channels, n_samples = self.data_generator.tensor_shape
+        # self.activation = params.get('activation', tf.nn.relu)
+        n_channels, n_samples = self.config.tensor_shape
         input = tf.reshape(features, [-1, n_channels, n_samples,  1])
 
         if self.debug: 
@@ -159,20 +190,22 @@ class Model(Object):
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
-        input = self.time_axis_cnn(input,
-                n_filters=32,
-                kernel_height=3,
-                kernel_width=3,
-                name='conv_%s' % 1,
-                training=training)
-        
-        input = self.time_axis_cnn(input,
-                n_filters=64,
-                kernel_height=3,
-                kernel_width=3,
-                name='convxxx',
-                # name='conv_%s' % 2,
-                training=training)
+        for layer in self.layers:
+            input = layer.chain(input=input, training=training)
+
+        # input = self.time_axis_cnn(input,
+        #         n_filters=32,
+        #         kernel_height=3,
+        #         kernel_width=3,
+        #         name='conv_%s' % 1,
+        #         training=training)
+        # 
+        # input = self.time_axis_cnn(input,
+        #         n_filters=64,
+        #         kernel_height=5,
+        #         kernel_width=5,
+        #         name='conv_%s' % 2,
+        #         training=training)
 
         #for ilayer in range(params.get('n_layers', 2)):
         #    n_filters = int(n_filters * n_filters_factor)
@@ -190,22 +223,22 @@ class Model(Object):
         #            kernel_width=int(kernel_width + ilayer*kernel_width_factor),
         #            name='conv_%s' % ilayer)
 
-        fc = tf.contrib.layers.flatten(input)
-        # fc = tf.layers.dense(fc, params.get('n_filters_dense', 115),
-        fc = tf.layers.dense(fc, params.get('n_filters_dense', 64),
-            name='dense', activation=self.activation,)
-
+        # fc = tf.contrib.layers.flatten(input)
+        # # fc = tf.layers.dense(fc, params.get('n_filters_dense', 115),
+        # fc = tf.layers.dense(fc, params.get('n_filters_dense', 64),
+        #     name='dense', activation=self.activation,)
+        fc = input 
         dropout = params.get('dropout_rate', self.dropout_rate)
         if dropout is not None:
             fc = tf.layers.dropout(
                 fc, rate=dropout, training=training)
         # fc = tf.layers.batch_normalization(fc, training=training)
 
-        predictions = tf.layers.dense(fc, self.data_generator.n_classes)
+        predictions = tf.layers.dense(fc, self.config.data_generator.n_classes)
         tf.summary.tensor_summary('predictions', predictions)
 
         # wastes a lot of memory?
-        dummy = tf.Variable((self.batch_size, self.data_generator.n_classes))
+        dummy = tf.Variable((self.batch_size, self.config.data_generator.n_classes))
         dummy = predictions
         # predictions = tf.Print(dummy, [dummy])
         predictions = tf.transpose(predictions) 
@@ -396,6 +429,7 @@ def main():
 
     if args.config:
         model = guts.load(filename=args.config)
+        model.config.setup()
 
     if args.clear:
         model.clear()
@@ -406,52 +440,48 @@ def main():
             device_count={'GPU': 0}
         )
 
-    logger.info('XXX')
     if args.show_data:
         from . import plot
         plot.show_data(model, shuffle=True)
         plt.show()
 
     elif args.write_tfrecord:
-        # import uuid
-        # model_id = uuid.uuid4()
         model_id = args.write_tfrecord
-        fn_tfrecord = '%s_train.tfrecord' % str(model_id)
 
         if os.path.isfile(args.write_tfrecord):
             if args.force:
                 delete_candidate = guts.load(filename=args.write_tfrecord)
-                for g in [delete_candidate.evaluation_data_generator,
-                        delete_candidate.data_generator]:
+                for g in [delete_candidate.config.evaluation_data_generator,
+                        delete_candidate.config.data_generator]:
                     g.cleanup()
                 delete_if_exists(args.write_tfrecord)
             else:
-                print('file %s exists. use --force to overwrite' % args.write_tfrecord)
+                print('file %s exists. use --force to overwrite' % \
+                        args.write_tfrecord)
                 sys.exit(0)
 
-        tfrecord_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
-        tfrecord_data_generator.tensor_shape = model.data_generator.tensor_shape
-        tfrecord_data_generator.channels = model.data_generator.channels
+        fn_tfrecord = '%s_train.tfrecord' % str(model_id)
+        tfrecord_data_generator = DataGeneratorBase(
+                fn_tfrecord=fn_tfrecord, config=model.config)
+        model.config.data_generator.write(fn_tfrecord)
+        model.config.data_generator = tfrecord_data_generator
 
-        model.data_generator.write(fn_tfrecord)
-        model.data_generator = tfrecord_data_generator
+        fn_tfrecord = '%s_eval.tfrecord' % str(model_id)
+        tfrecord_data_generator = DataGeneratorBase(
+                fn_tfrecord=fn_tfrecord, config=model.config)
 
-        if model.evaluation_data_generator is not None:
-            fn_tfrecord = '%s_eval.tfrecord' % str(model_id)
-            eval_data_generator = DataGeneratorBase(fn_tfrecord=fn_tfrecord)
-            eval_data_generator.tensor_shape = model.evaluation_data_generator.tensor_shape
-            eval_data_generator.channels = model.evaluation_data_generator.channels
+        model.config.evaluation_data_generator.write(fn_tfrecord)
+        model.config.evaluation_data_generator = tfrecord_data_generator
 
-            model.evaluation_data_generator.write(fn_tfrecord)
-            model.evaluation_data_generator = eval_data_generator
-
+        model.name += '_tf'
         model.dump(filename=args.write_tfrecord + '.config')
         logger.info('Wrote new model file: %s' % (
             args.write_tfrecord + '.config'))
 
     elif args.from_tfrecord:
         logger.info('Reading data from %s' % args.from_tfrecord)
-        model.data_generator = TFRecordData(fn_tfrecord=args.from_tfrecord)
+        model.config.data_generator = TFRecordData(
+                fn_tfrecord=args.from_tfrecord)
 
     elif args.new_config:
         fn_config = args.new_config

@@ -60,9 +60,12 @@ def show_data(model, shuffle=False):
 
     fig_w, axs_w_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
     axs_w = flatten(axs_w_grid)
-    model.data_generator.shuffle = shuffle
+    # model.config.data_generator.setup()
+    # model.config.evaluation_data_generator.setup()
+
+    model.config.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
-            model.data_generator.generate()):
+            model.config.data_generator.generate()):
 
         if i == n:
             break
@@ -82,14 +85,12 @@ def show_data(model, shuffle=False):
 
     [clear_ax(ax) for ax in axs_w]
 
-    labels_eval = [label for label in
-            model.evaluation_data_generator.iter_labels()]
-
-    labels_train = [label for label in model.data_generator.iter_labels()]
+    labels_eval = list(model.config.evaluation_data_generator.iter_labels())
+    labels_train = list(model.config.data_generator.iter_labels())
 
     locs = []
     labels = []
-    for nslc, i in model.data_generator.nslc_to_index.items():
+    for nslc, i in model.config.data_generator.nslc_to_index.items():
         locs.append(i)
         labels.append('.'.join(nslc))
 
