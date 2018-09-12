@@ -20,6 +20,7 @@ import numpy as num
 import os
 import glob
 import sys
+import copy
 
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
 from .util import delete_if_exists, first_element, filter_oob
@@ -33,9 +34,14 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-class Normalization(Object):
+class ChunkOperation(Object):
+    '''Modifies a data chunk (2D image) when called.'''
     def __call__(self, chunk):
         pass
+
+
+class Normalization(ChunkOperation):
+    pass
 
 
 class NormalizeMax(Normalization):
@@ -108,7 +114,7 @@ class NormalizeChannelStd(Normalization):
         chunk += trace_levels
 
 
-class Noise(Object):
+class Noise(ChunkOperation):
     level = Float.T(default=1., optional=True)
 
     def __call__(self, chunk):
@@ -121,10 +127,8 @@ class WhiteNoise(Noise):
         chunk += num.random.random(chunk.shape) * self.level
 
 
-class Imputation(Object):
-
-    def __call__(self, *args, **kwargs):
-        pass
+class Imputation(ChunkOperation):
+    pass
 
 
 class ImputationZero(Imputation):
@@ -144,45 +148,47 @@ class DataGeneratorBase(Object):
     This class to dump and load data to/from all subclasses into
     TFRecordDatasets.
     '''
-    _shape = Tuple.T(2, Int.T(), optional=True, help='(Don\'t modify)')
-    _channels =  List.T(Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
     fn_tfrecord = String.T(optional=True)
-    n_classes = Int.T(default=3)
-    noise = Noise.T(default=Noise(), help='Add noise to feature')
-    normalization = Normalization.T(default=NormalizeMax(), optional=True)
+    noise = Noise.T(default=Noise(), optional=True, help='Add noise to feature')
 
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
 
-    imputation = Imputation.T(
-        default=ImputationZero(),
-        help='How to mask and fill gaps')
-
-    blacklist = List.T(
-        String.T(), help='List blacklist patterns (may contain wild cards')
-
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
+        self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
-        self.setup()
+
+        self.n_classes = 3
+
+    def set_config(self, pinky_config):
+        self.config = pinky_config
 
     def setup(self):
-        pass
+        if self.noise is None:
+            self.noise = Noise()
+
+    # @property
+    # def tensor_shape(self):
+    #     return self.config.tensor_shape
 
     @property
     def channels(self):
-        return self._channels
+        return self.config._channels
 
     @channels.setter
     def channels(self, v):
-        self._channels = v
+        self.config._channels = v
 
     @property
     @lru_cache(maxsize=1)
     def nsl_to_indices(self):
         ''' Returns a dictionary which maps nsl codes to indexing arrays.'''
-        indices = defaultdict(list)
+        indices = OrderedDict()
         for nslc, index in self.nslc_to_index.items():
-            indices[nslc[:3]].append(index)
+            key = nslc[:3]
+            _v = indices.get(key, [])
+            _v.append(index)
+            indices[key] = _v
 
         for k in indices.keys():
             indices[k] = num.array(indices[k])
@@ -201,42 +207,20 @@ class DataGeneratorBase(Object):
         d = OrderedDict()
         idx = 0
         for nslc in self.channels:
-            if not util.match_nslc(self.blacklist, nslc):
+            if not util.match_nslc(self.config.blacklist, nslc):
                 d[nslc] = idx
                 idx += 1
         return d
-        # items = ['%s : %s' % ('.'.join(k), v) for k, v in d.items()]
-        # logger.debug('Setting nslc-to-index mapping:\n')
-        # logger.debug('\n'.join(items))
-        # return d
 
     def reject_blacklisted(self, tr):
         '''returns `False` if nslc codes of `tr` match any of the blacklisting
         patters. Otherwise returns `True`'''
-        return not util.match_nslc(self.blacklist, tr.nslc_id)
-
-    @property
-    def tensor_shape(self):
-        return self._shape
+        return not util.match_nslc(self.config.blacklist, tr.nslc_id)
 
     @property
     def generate_output_types(self):
         '''Return data types of features and labels'''
         return tf.float32, tf.float32
-
-    @tensor_shape.setter
-    def tensor_shape(self, v):
-        if v == self._shape:
-            return self._shape
-        else:
-            self._shape = v
-
-    @property
-    def output_shapes(self):
-        '''Return a tuple containing the shape of feature arrays and number of
-        labels.
-        '''
-        return (self.tensor_shape, self.n_classes)
 
     def iter_labels(self):
         '''Iterate through labels.'''
@@ -244,6 +228,7 @@ class DataGeneratorBase(Object):
             yield label
 
     def generate(self):
+        self.setup()
         record_iterator = tf.python_io.tf_record_iterator(
                 path=self.fn_tfrecord)
         return self.unpack_examples(record_iterator)
@@ -252,12 +237,12 @@ class DataGeneratorBase(Object):
         return tf.data.Dataset.from_generator(
             self.generate,
             self.generate_output_types,
-            output_shapes=self.output_shapes)
+            output_shapes=self.config.output_shapes)
 
     def get_raw_data_chunk(self):
         '''Return an array of size (Nchannels x Nsamples_max) filled with
         NANs.'''
-        empty_array = num.empty(self.tensor_shape, dtype=num.float32)
+        empty_array = num.empty(self.config.tensor_shape, dtype=num.float32)
         empty_array.fill(num.nan)
         return empty_array
 
@@ -277,7 +262,7 @@ class DataGeneratorBase(Object):
         indices = self.nsl_indices
         a = num.random.random(len(indices))
         i = num.where(a < self.station_dropout_rate)[0]
-        imputation_value = self.imputation(chunk)
+        imputation_value = self.config.imputation(chunk)
         for ii in i:
             chunk[indices[ii], :] = imputation_value
 
@@ -286,7 +271,7 @@ class DataGeneratorBase(Object):
         performance.'''
 
         # fill gaps
-        chunk[num.isnan(chunk)] = self.imputation(chunk)
+        chunk[num.isnan(chunk)] = self.config.imputation(chunk)
 
         # mask data
         self.mask(chunk)
@@ -295,7 +280,10 @@ class DataGeneratorBase(Object):
         self.noise(chunk)
 
         # apply normalization
-        self.normalization(chunk)
+        self.config.normalization(chunk)
+
+        # finally, ensure data range:
+        chunk /= num.max(chunk)
 
         return chunk
 
@@ -308,7 +296,7 @@ class DataGeneratorBase(Object):
             label = example.features.feature['label'].bytes_list.value[0]
 
             chunk = num.fromstring(chunk, dtype=num.float32)
-            chunk = chunk.reshape(self.tensor_shape)
+            chunk = chunk.reshape(self.config.tensor_shape)
             label = num.fromstring(label, dtype=num.float32)
             yield self.process_chunk(chunk), label
 
@@ -328,42 +316,40 @@ class ChannelStackGenerator(DataGeneratorBase):
     '''Stack summed absolute traces of all available channels of a station
     provided by the `generator`.
     '''
-    generator = DataGeneratorBase.T(help='The generator to be compressed')
-
+    xgenerator = DataGeneratorBase.T(help='The generator to be compressed')
+        
     def setup(self):
+        self.nsl_to_indices_orig = copy.deepcopy(self.xgenerator.nsl_to_indices)
         self.channels = [k + ('STACK', ) for k in
-                self.generator.nsl_to_indices.keys()]
-        self.tensor_shape = (len(self.channels), self.generator.tensor_shape[1])
+                self.xgenerator.nsl_to_indices.keys()]
 
     def generate(self):
-        index_mapping_in = self.generator.nsl_to_indices
-
+        self.setup()
         d = OrderedDict()
         for idx, nsl in enumerate(self.channels):
             d[nsl[:3]] = idx
 
-        for feature, label in self.generator.generate():
+        for feature, label in self.xgenerator.generate():
             chunk = self.get_raw_data_chunk()
-            for nsl, indices in index_mapping_in.items():
+            for nsl, indices in self.nsl_to_indices_orig.items():
                 chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
+
             yield chunk, label
+
+    @classmethod
+    def from_generator(cls, generator):
+        return cls(xgenerator=generator, config=generator.config)
 
 
 class DataGenerator(DataGeneratorBase):
 
     '''Generate examples from data on hard drives.'''
-    sample_length = Float.T(help='length [s] of data window')
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
     effective_deltat = Float.T(optional=True)
     tpad = Float.T(default=0.,
             help='padding between p phase onset and data chunk start')
     deltat_want = Float.T(optional=True)
-    reference_target = Target.T(
-        default=Target(
-            codes=('', 'NKC', '', 'SHZ'),
-            lat=50.2331,
-            lon=12.448,
-            elevation=546))
+
     highpass = Float.T(optional=True)
     lowpass = Float.T(optional=True)
 
@@ -414,7 +400,7 @@ class DataGenerator(DataGeneratorBase):
 
     def extract_labels(self, source):
         n, e = orthodrome.latlon_to_ne(
-            self.reference_target.lat, self.reference_target.lon,
+            self.config.reference_target.lat, self.config.reference_target.lon,
             source.lat, source.lon)
         return (n, e, source.depth)
 
@@ -460,7 +446,6 @@ class PileData(DataGenerator):
             help= 'Sorting markers speeds up data io. Shuffled markers \
             improve generalization')
 
-
     def setup(self):
         self.data_pile = pile.make_pile(
             self.data_paths, fileformat=self.data_format)
@@ -471,7 +456,7 @@ class PileData(DataGenerator):
         self.deltat_want = self.deltat_want or \
                 min(self.data_pile.deltats.keys())
         self.n_samples_max = int(
-                (self.sample_length + self.tpad) / self.deltat_want)
+                (self.config.sample_length + self.tpad) / self.deltat_want)
 
         logger.debug('loading markers')
         markers = marker.load_markers(self.fn_markers)
@@ -484,7 +469,7 @@ class PileData(DataGenerator):
 
         markers_by_nsl = {}
         for m in markers:
-            if not m.match_nsl(self.reference_target.codes[:3]):
+            if not m.match_nsl(self.config.reference_target.codes[:3]):
                 continue
             key = m.one_nslc()[:3]
             _ms = markers_by_nsl.get(key, [])
@@ -499,7 +484,7 @@ class PileData(DataGenerator):
 
         self.channels = list(self.data_pile.nslc_ids.keys())
         self.channels.sort()
-        self.tensor_shape = (len(self.channels), self.n_samples_max)
+        self.config.tensor_shape = (len(self.channels), self.n_samples_max)
 
     def check_inputs(self):
         if len(self.data_pile.deltats()) > 1:
@@ -509,7 +494,7 @@ class PileData(DataGenerator):
     def extract_labels(self, marker):
         source = marker.get_event()
         n, e = orthodrome.latlon_to_ne(
-            self.reference_target.lat, self.reference_target.lon,
+            self.config.reference_target.lat, self.config.reference_target.lon,
             source.lat, source.lon)
         return (n, e, source.depth)
 
@@ -518,6 +503,7 @@ class PileData(DataGenerator):
             yield self.extract_labels(m)
 
     def generate(self):
+        self.setup()
         tr_len = self.n_samples_max * self.deltat_want
         nslc_to_index = self.nslc_to_index
 
@@ -557,27 +543,25 @@ class GFSwarmData(DataGenerator):
         self.targets = synthi.guess_targets_from_stations(
             stations, quantity=self.quantity)
         self.store = self.swarm.engine.get_store()  # uses default store
-        self.n_samples_max = int((self.sample_length + self.tpad) / self.store.config.deltat)
+        self.n_samples_max = int((self.config.sample_length + self.tpad) / self.store.config.deltat)
         self.tensor_shape = (len(self.targets), self.n_samples_max)
 
     def make_data_chunk(self, source, results):
         tref = self.store.t(
             self.onset_phase, (
                 source.depth,
-                source.distance_to(self.reference_target))
+                source.distance_to(self.config.reference_target))
             )
 
         # what about tref at other locations
         tref += (source.time - self.tpad)
         traces = [result.trace for result in results]
-        ydata_stacked = self.fit_data_into_chunk(traces, tref=tref)
-
-        return ydata_stacked
+        return self.fit_data_into_chunk(traces, tref=tref)
 
     def extract_labels(self, source):
         elat, elon = source.effective_latlon
         n, e = orthodrome.latlon_to_ne(
-            self.reference_target.lat, self.reference_target.lon,
+            self.config.reference_target.lat, self.config.reference_target.lon,
             elat, elon)
         return (n, e, source.depth)
 
@@ -631,7 +615,7 @@ class SeismosizerData(DataGenerator):
 
         dt = self.deltat_want or self.store.config.deltat
         self.n_samples_max = int((self.sample_length + self.tpad) / dt)
-        self.tensor_shape = (len(self.targets), self.n_samples_max)
+        self.config.tensor_shape = (len(self.targets), self.n_samples_max)
 
     def extract_labels(self, source):
         # print('labels n%s, e%s, z%s' % ( source.north_shift, source.east_shift,
@@ -639,6 +623,7 @@ class SeismosizerData(DataGenerator):
         return (source.north_shift, source.east_shift, source.depth)
 
     def generate(self):
+        self.setup()
         response = self.engine.process(
             sources=self.sources,
             targets=self.targets)
