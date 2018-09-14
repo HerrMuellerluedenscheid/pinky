@@ -64,6 +64,7 @@ class CNNLayer(Layer):
         logger.debug('input shape %s' % input.shape)
         pool_height = self.kernel_height if self.kernel_height else 1
         kernel_height = self.kernel_height or n_channels
+        print('CHAINGIN IN ', n_channels)
 
         input = tf.layers.conv2d(
             inputs=input,
@@ -145,10 +146,10 @@ class Model(Object):
                 self.batch_size)
 
     def generate_dataset(self):
-        # self.config.data_generator.test_x()
         dataset = self.config.data_generator.get_dataset()
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
+
         return dataset.repeat(count=self.n_epochs).batch(self.batch_size)
 
     def model(self, features, labels, mode, params):
@@ -159,7 +160,14 @@ class Model(Object):
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
-        input = tf.reshape(features, [-1, *self.config.tensor_shape,  1])
+        # It's impo
+        input = tf.reshape(features, [-1, *self.config.data_generator.tensor_shape,  1])
+        # input = tf.reshape(features, [self.batch_size,
+        #     self.config.data_generator.tensor_shape[0], -1,  1])
+
+        # CHEKC BATCH SIZE@!!!!!!
+        # input = tf.reshape(features, [-1,
+        #     *self.config.data_generator.tensor_shape,  self.batch_size])
 
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)

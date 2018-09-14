@@ -41,6 +41,11 @@ class PinkyConfig(Object):
         self.data_generator.set_config(self)
         self.evaluation_data_generator.set_config(self)
 
+        self.data_generator.setup()
+        self.evaluation_data_generator.setup()
+
+        self.set_n_samples()
+
         if self.stack_channels:
             self.data_generator = ChannelStackGenerator.from_generator(
                     generator=self.data_generator)
@@ -49,8 +54,6 @@ class PinkyConfig(Object):
 
         self.data_generator.setup()
         self.evaluation_data_generator.setup()
-
-        self.set_n_samples()
 
     def set_n_samples(self):
         '''Set number of sampes (n_samples) from first example of data

@@ -164,8 +164,9 @@ class DataGeneratorBase(Object):
         self.config = pinky_config
 
     def setup(self):
-        if self.noise is None:
-            self.noise = Noise()
+        ...
+        # if self.noise is None:
+        #     self.noise = Noise()
 
     @property
     def tensor_shape(self):
@@ -223,7 +224,6 @@ class DataGeneratorBase(Object):
         return tf.float32, tf.float32
 
     def generate(self):
-        # self.setup()
         record_iterator = tf.python_io.tf_record_iterator(
             path=self.fn_tfrecord)
 
@@ -233,12 +233,16 @@ class DataGeneratorBase(Object):
         '''Iterate through labels.'''
         for _, label in self.generate():
             yield label
+    
+    @property
+    def output_shapes(self):
+        return self.config.output_shapes
 
     def get_dataset(self):
         return tf.data.Dataset.from_generator(
             self.generate,
             self.generate_output_types,
-            output_shapes=self.config.output_shapes)
+            output_shapes=self.output_shapes)
 
     def get_raw_data_chunk(self, shape):
         '''Return an array of size (Nchannels x Nsamples_max) filled with
@@ -293,7 +297,8 @@ class DataGeneratorBase(Object):
         self.mask(chunk)
 
         # add noise
-        self.noise(chunk)
+        if self.noise:
+            self.noise(chunk)
 
         # apply normalization
         self.config.normalization(chunk)
@@ -338,20 +343,31 @@ class ChannelStackGenerator(DataGeneratorBase):
     xgenerator = DataGeneratorBase.T(help='The generator to be compressed')
         
     def setup(self):
-        self.nsl_to_indices_orig = copy.deepcopy(self.xgenerator.nsl_to_indices)
+        self.nsl_to_indices_orig = copy.deepcopy(
+                self.xgenerator.nsl_to_indices)
+
         self._channels = [k + ('STACK', ) for k in
                 self.xgenerator.nsl_to_indices.keys()]
+        self.n_channels = len(self._channels)
+
+    @property
+    def tensor_shape(self):
+        return (self.n_channels, 4500)
+
+    @property
+    def output_shapes(self):
+        '''Return a tuple containing the shape of feature arrays and number of
+        labels.
+        '''
+        return (self.tensor_shape, self.n_classes)
 
     def generate(self):
-        _, nsamples = self.tensor_shape
-        nchannels = len(self._channels)
-
         d = OrderedDict()
         for idx, nsl in enumerate(self._channels):
             d[nsl[:3]] = idx
 
         for feature, label in self.xgenerator.generate():
-            chunk = self.get_raw_data_chunk(shape=(nchannels, nsamples))
+            chunk = self.get_raw_data_chunk(shape=self.tensor_shape)
             for nsl, indices in self.nsl_to_indices_orig.items():
                 chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
 
