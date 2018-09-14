@@ -58,8 +58,8 @@ class NormalizeLog(Normalization):
         sign = num.sign(chunk)
 
         chunk[:] = num.log(num.abs(chunk)+EPSILON)
-        chunk *= sign
-        chunk += mean
+        # chunk *= sign
+        # chunk += mean
 
 
 class NormalizeNthRoot(Normalization):

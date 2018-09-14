@@ -122,7 +122,7 @@ def show_data(model, shuffle=False):
     plt.show()
 
 
-def show_kernels(weights):
+def show_kernels(weights, name=None):
     n_columns = 8
     n_weights = weights.shape[-1]
     n_rows = int(n_weights // n_columns)
@@ -137,5 +137,8 @@ def show_kernels(weights):
         ax.set_yticks([])
         ax.set_xticks([])
 
-    fig.savefig('pinky-weights.pdf')
+    if name:
+        fig.savefig(name)
+    else:
+        plt.show()
 

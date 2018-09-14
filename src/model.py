@@ -44,12 +44,15 @@ class Layer(Object):
     n_filters = Int.T()
 
     activation = String.T(
-            default='leaky_relu', help='activation function of tf.nn') # test
+            default='relu', help='activation function of tf.nn') # test
     # leaky relu
 
     def get_activation(self):
         '''Return activation function from tensorflow.nn'''
         return getattr(tf.nn, self.activation)
+
+    def visualize_kernel(self, estimator, index=0, save_path=None):
+        logger.debug('not implemented')
 
 
 class CNNLayer(Layer):
@@ -64,7 +67,6 @@ class CNNLayer(Layer):
         logger.debug('input shape %s' % input.shape)
         pool_height = self.kernel_height if self.kernel_height else 1
         kernel_height = self.kernel_height or n_channels
-        print('CHAINGIN IN ', n_channels)
 
         input = tf.layers.conv2d(
             inputs=input,
@@ -85,6 +87,11 @@ class CNNLayer(Layer):
                     input, num_or_size_splits=self.n_filters, axis=-1)[0])
 
         return input
+
+    def visualize_kernel(self, estimator, index=0, save_path=None):
+        save_name = pjoin(save_path, 'kernel-%s.pdf' % self.name)
+        weights = estimator.get_variable_value('%s/kernel' % self.name)
+        plot.show_kernels(weights[:, :, index, ...], name=save_name)
 
 
 class DenseLayer(Layer):
@@ -270,27 +277,6 @@ class Model(Object):
 
             return tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
 
-    def train(self, params=None):
-        '''Used by the optimizer.
-
-        Todo: refactor to optimizer'''
-        params = params or {}
-        with self.sess as default:
-
-            self.est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.get_outdir(), params=params)
-
-            # New feature to test:
-            # evaluator = tf.estimator.InMemoryEvaluatorHook(
-            #     estimator=est,
-            #     input_fn=self.generate_dataset
-            #     )
-            # est.train(input_fn=self.generate_dataset, hooks=[evaluator])
-            
-            self.est.train(input_fn=self.generate_dataset)
-            logger.info('====== start evaluation')
-            return self.est.evaluate(input_fn=self.generate_eval_dataset)
-
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...'''
         params = params or {}
@@ -317,10 +303,16 @@ class Model(Object):
             sys.exit('No hyperparameter optimizer defined in config file')
         self.hyperparameter_optimizer.optimize(self)
 
-    def show_kernels(self, layer_name):
-        '''Shows weight kernels of the given `layer_name`.'''
-        weights = self.est.get_variable_value('%s/kernel' % layer_name)
-        plot.show_kernels(weights[:, :, 0, :])
+    def save_kernels(self, index=0):
+        '''save weight kernels of all layers (at index=`index`).'''
+        save_path = os.path.join(self.get_summary_outdir(), 'kernels')
+
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
+        logger.info('Storing weight matrices at %s' % save_path)
+        for layer in self.layers:
+            layer.visualize_kernel(self.est, save_path=save_path)
 
     def restore(self):
         # tf.reset_default_graph()
@@ -447,8 +439,8 @@ def main():
             model.train_multi_gpu()
         else:
             model.train_and_evaluate()
-            model.show_kernels('conv_1')
             # model.train()
+        model.save_kernels()
     elif args.restore:
         model.restore()
 
