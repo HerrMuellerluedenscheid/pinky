@@ -1,4 +1,6 @@
 import tensorflow as tf
+import os
+import logging
 from pyrocko.guts import Object, Float, Int, String, Bool, List, Tuple
 
 from pyrocko.pile import make_pile
@@ -6,7 +8,9 @@ from pyrocko.gf.seismosizer import Target
 
 from .data import Noise, Normalization, DataGeneratorBase, Imputation
 from .data import ImputationZero, ChannelStackGenerator
-import os
+
+
+logger = logging.getLogger(__name__)
 
 
 class PinkyConfig(Object):
@@ -20,19 +24,18 @@ class PinkyConfig(Object):
 
     data_generator = DataGeneratorBase.T()
     evaluation_data_generator = DataGeneratorBase.T()
-    _shape = Tuple.T(2, Int.T(), optional=True, help='(Don\'t modify)')
-    _channels =  List.T(Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
-
     normalization = Normalization.T(default=Normalization(), optional=True)
-
     imputation = Imputation.T(
         default=ImputationZero(),
         optional=True,
         help='How to mask and fill gaps')
     
+    _n_samples = Int.T(optional=True)
     reference_target = Target.T(optional=True)
 
     n_classes = Int.T(default=3)
+    _channels =  List.T(
+            Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
 
     def setup(self):
         self.data_generator.set_config(self)
@@ -44,21 +47,33 @@ class PinkyConfig(Object):
             self.evaluation_data_generator = ChannelStackGenerator.from_generator(
                     generator=self.evaluation_data_generator)
 
-        # self.data_generator.set_config(self)
-        # self.evaluation_data_generator.set_config(self)
         self.data_generator.setup()
         self.evaluation_data_generator.setup()
 
-    @property
-    def tensor_shape(self):
-        return self._shape
+        self.set_n_samples()
 
-    @tensor_shape.setter
-    def tensor_shape(self, v):
-        if v == self._shape:
-            return self._shape
-        else:
-            self._shape = v
+    def set_n_samples(self):
+        '''Set number of sampes (n_samples) from first example of data
+        generator. Note that this assumes that the evaluation data generator
+        contains identical shaped examples.'''
+        example, _ = next(self.data_generator.generate())
+        self._n_samples = example.shape[1]
+        assert(example.shape == self.tensor_shape)
+
+    @property
+    def channels(self):
+        return self._channels
+
+    @channels.setter
+    def channels(self, v):
+        if self._channels:
+            logger.warn('Setting channels although channels have been \
+                    assigned before')
+        self._channels = v
+
+    @property
+    def n_channels(self):
+        return len(self._channels)
 
     @property
     def output_shapes(self):
@@ -67,3 +82,6 @@ class PinkyConfig(Object):
         '''
         return (self.tensor_shape, self.n_classes)
 
+    @property
+    def tensor_shape(self):
+        return (self.n_channels, self._n_samples)

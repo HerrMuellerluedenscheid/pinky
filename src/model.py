@@ -44,7 +44,8 @@ class Layer(Object):
     n_filters = Int.T()
 
     activation = String.T(
-            default='relu', help='activation function of tf.nn')
+            default='leaky_relu', help='activation function of tf.nn') # test
+    # leaky relu
 
     def get_activation(self):
         '''Return activation function from tensorflow.nn'''
@@ -61,10 +62,8 @@ class CNNLayer(Layer):
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
-        if not self.kernel_height:
-            kernel_height = n_channels
-        else:
-            kernel_height = self.kernel_height
+        pool_height = self.kernel_height if self.kernel_height else 1
+        kernel_height = self.kernel_height or n_channels
 
         input = tf.layers.conv2d(
             inputs=input,
@@ -76,7 +75,7 @@ class CNNLayer(Layer):
             name=self.name)
 
         input = tf.layers.max_pooling2d(input,
-            pool_size=(kernel_height, self.kernel_width),
+            pool_size=(pool_height, self.kernel_width),
             strides=(1, 1), name=self.name+'maxpool')
         
         if logger.getEffectiveLevel() == logging.DEBUG:
@@ -103,7 +102,7 @@ class Model(Object):
 
     config = PinkyConfig.T()
     hyperparameter_optimizer = Optimizer.T(optional=True)
-    dropout_rate = Float.T(default=0.1)
+    dropout_rate = Float.T(default=0.01)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
     max_steps = Int.T(default=5000)
@@ -146,11 +145,11 @@ class Model(Object):
                 self.batch_size)
 
     def generate_dataset(self):
+        # self.config.data_generator.test_x()
         dataset = self.config.data_generator.get_dataset()
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
-        dataset = dataset.repeat(count=self.n_epochs)
-        return dataset.batch(self.batch_size)
+        return dataset.repeat(count=self.n_epochs).batch(self.batch_size)
 
     def model(self, features, labels, mode, params):
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
@@ -161,23 +160,21 @@ class Model(Object):
             tf.summary.image('input', view)
 
         input = tf.reshape(features, [-1, *self.config.tensor_shape,  1])
+
         for layer in self.layers:
+            logger.debug('chain in layer: %s' % layer)
             input = layer.chain(input=input, training=training)
 
-        if dropout is not None:
-            fc = tf.layers.dropout(
-                input, rate=dropout, training=training)
+        # fc = tf.layers.dropout(
+        #     input, rate=self.dropout_rate, training=training)
         # fc = tf.layers.batch_normalization(fc, training=training)
 
-        predictions = tf.layers.dense(fc, self.config.data_generator.n_classes)
+        predictions = input
         tf.summary.tensor_summary('predictions', predictions)
 
-        # wastes a lot of memory?
-        dummy = tf.Variable((self.batch_size, self.config.data_generator.n_classes))
-        dummy = predictions
-        # predictions = tf.Print(dummy, [dummy])
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
+
         errors = tf.abs(predictions - labels)
 
         variable_summaries(errors[0], 'error_abs_x')
