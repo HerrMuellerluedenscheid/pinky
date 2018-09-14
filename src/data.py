@@ -9,7 +9,7 @@ from pyrocko.gui import marker
 from pyrocko.gf.seismosizer import Engine, Target, LocalEngine, Source
 from pyrocko import orthodrome
 from pyrocko import pile
-from swarm import synthi, source_region
+# from swarm import synthi, source_region
 from collections import defaultdict, OrderedDict
 from functools import lru_cache
 from pyrocko import util
@@ -566,69 +566,6 @@ class PileData(DataGenerator):
                 yield self.process_chunk(chunk), self.extract_labels(m)
 
 
-
-class GFSwarmData(DataGenerator):
-    fn_stations = String.T()
-    swarm = source_region.Swarm.T()
-    n_sources = Int.T(default=100)
-    onset_phase = String.T(default='first(p|P)')
-    quantity = String.T(default='velocity')
-
-    def setup(self):
-        stations = load_stations(self.fn_stations)
-        self.targets = synthi.guess_targets_from_stations(
-            stations, quantity=self.quantity)
-        self.store = self.swarm.engine.get_store()  # uses default store
-        self.n_samples = int((self.config.sample_length + self.tpad) / self.store.config.deltat)
-        # self.tensor_shape = (len(self.targets), self.n_samples)
-
-    def make_data_chunk(self, source, results):
-        tref = self.store.t(
-            self.onset_phase, (
-                source.depth,
-                source.distance_to(self.config.reference_target))
-            )
-
-        # what about tref at other locations
-        tref += (source.time - self.tpad)
-        traces = [result.trace for result in results]
-        chunk = self.get_raw_data_chunk(self.tensor_shape)
-        return self.fit_data_into_chunk(traces, chunk=chunk, tref=tref)
-
-    def extract_labels(self, source):
-        elat, elon = source.effective_latlon
-        n, e = orthodrome.latlon_to_ne(
-            self.config.reference_target.lat, self.config.reference_target.lon,
-            elat, elon)
-        return (n, e, source.depth)
-
-    def generate(self):
-        response = self.swarm.engine.process(
-            sources=self.swarm.get_effective_sources(),
-            targets=self.targets)
-
-        for isource, source in enumerate(response.request.sources):
-            chunk = self.make_data_chunk(source, response.results_list[isource])
-            yield self.process_chunk(chunk), self.extract_labels(source)
-
-    @classmethod
-    def get_example(cls):
-        gf_engine = LocalEngine(
-            use_config=True,
-            store_superdirs=['/data/stores'],
-            default_store_id='test_store'
-        )
-
-        example_swarm = source_region.Swarm(
-            geometry=source_region.CuboidSourceGeometry(),
-            timing=source_region.RandomTiming(),
-            engine=gf_engine
-        )
-
-        return cls(
-            fn_stations='stations.pf', sample_length=10, swarm=example_swarm)
-
-        
 class SeismosizerData(DataGenerator):
     fn_sources = String.T(
             help='filename containing pyrocko.gf.seismosizer.Source instances')

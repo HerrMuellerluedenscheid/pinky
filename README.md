@@ -2,8 +2,7 @@ Prereqs
 -------
 
  - tensorflow
- - scikit-optimize
- - git clone git@github.com:HerrMuellerluedenscheid/swarming.git
+ - scikit-optimize (optional for hyperparameter optimization)
 
 Invoke
 ------
