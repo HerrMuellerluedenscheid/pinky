@@ -26,9 +26,7 @@ class PinkyConfig(Object):
     evaluation_data_generator = DataGeneratorBase.T()
     normalization = Normalization.T(default=Normalization(), optional=True)
     imputation = Imputation.T(
-        default=ImputationZero(),
-        optional=True,
-        help='How to mask and fill gaps')
+        optional=True, help='How to mask and fill gaps')
     
     _n_samples = Int.T(optional=True)
     reference_target = Target.T(optional=True)

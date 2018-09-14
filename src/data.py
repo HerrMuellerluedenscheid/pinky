@@ -264,6 +264,8 @@ class DataGeneratorBase(Object):
 
     def mask(self, chunk):
         '''For data augmentation: Mask traces in chunks'''
+        if not self.config.imputation:
+            return
         indices = self.nsl_indices
         a = num.random.random(len(indices))
         i = num.where(a < self.station_dropout_rate)[0]
@@ -271,30 +273,14 @@ class DataGeneratorBase(Object):
         for ii in i:
             chunk[indices[ii], :] = imputation_value
 
-    def stack_channels(self, chunk):
-        _, nsamples = self.tensor_shape
-        nchannels = len(self._channels)
-
-        d = OrderedDict()
-        for idx, nsl in enumerate(self._channels):
-            d[nsl[:3]] = idx
-
-        for feature, label in self.xgenerator.generate():
-            chunk = self.get_raw_data_chunk(shape=(nchannels, nsamples))
-            for nsl, indices in self.nsl_to_indices_orig.items():
-                chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
-
-            yield chunk, label
-
     def process_chunk(self, chunk):
         '''Probably better move this to the tensorflow side for better
         performance.'''
 
         # fill gaps
-        chunk[num.isnan(chunk)] = self.config.imputation(chunk)
-
-        # mask data
-        self.mask(chunk)
+        if self.config.imputation:
+            chunk[num.isnan(chunk)] = self.config.imputation(chunk)
+            self.mask(chunk)
 
         # add noise
         if self.noise:
@@ -339,19 +325,22 @@ class ChannelStackGenerator(DataGeneratorBase):
     '''Stack summed absolute traces of all available channels of a station
     provided by the `generator`.
     '''
-    xgenerator = DataGeneratorBase.T(help='The generator to be compressed')
+    in_generator = DataGeneratorBase.T(help='The generator to be compressed')
         
     def setup(self):
         self.nsl_to_indices_orig = copy.deepcopy(
-                self.xgenerator.nsl_to_indices)
+                self.in_generator.nsl_to_indices)
 
         self._channels = [k + ('STACK', ) for k in
-                self.xgenerator.nsl_to_indices.keys()]
+                self.in_generator.nsl_to_indices.keys()]
         self.n_channels = len(self._channels)
 
     @property
-    def tensor_shape(self):
-        return (self.n_channels, 4500)
+    def nslc_to_index(self):
+        d = OrderedDict()
+        for idx, nsl in enumerate(self._channels):
+            d[nsl[:3]] = idx
+        return d
 
     @property
     def output_shapes(self):
@@ -361,11 +350,8 @@ class ChannelStackGenerator(DataGeneratorBase):
         return (self.tensor_shape, self.n_classes)
 
     def generate(self):
-        d = OrderedDict()
-        for idx, nsl in enumerate(self._channels):
-            d[nsl[:3]] = idx
-
-        for feature, label in self.xgenerator.generate():
+        d = self.nslc_to_index
+        for feature, label in self.in_generator.generate():
             chunk = self.get_raw_data_chunk(shape=self.tensor_shape)
             for nsl, indices in self.nsl_to_indices_orig.items():
                 chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
@@ -374,7 +360,10 @@ class ChannelStackGenerator(DataGeneratorBase):
 
     @classmethod
     def from_generator(cls, generator):
-        return cls(xgenerator=generator, config=generator.config)
+        return cls(in_generator=generator, config=generator.config)
+
+    def iter_labels(self):
+        return self.in_generator.iter_labels()
 
 
 class DataGenerator(DataGeneratorBase):
