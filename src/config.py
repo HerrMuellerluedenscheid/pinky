@@ -37,6 +37,18 @@ class PinkyConfig(Object):
     _channels =  List.T(
             Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
 
+    # Not implemented for DataGeneratorBase
+    highpass = Float.T(optional=True, help='highpass filter corner frequency')
+    lowpass = Float.T(optional=True, help='lowpass filter corner frequency')
+
+    highpass_order = Int.T(default=4, optional=True)
+    lowpass_order = Int.T(default=4, optional=True)
+
+    absolute = Bool.T(help='Use absolute amplitudes', default=False)
+    tpad = Float.T(default=0.,
+            help='padding between p phase onset and data chunk start')
+    deltat_want = Float.T(optional=True)
+
     def setup(self):
         self.data_generator.set_config(self)
         self.evaluation_data_generator.set_config(self)

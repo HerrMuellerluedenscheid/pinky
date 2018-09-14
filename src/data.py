@@ -380,19 +380,6 @@ class ChannelStackGenerator(DataGeneratorBase):
 
 class DataGenerator(DataGeneratorBase):
 
-    '''Generate examples from data on hard drives.'''
-    absolute = Bool.T(help='Use absolute amplitudes', default=False)
-    effective_deltat = Float.T(optional=True)
-    tpad = Float.T(default=0.,
-            help='padding between p phase onset and data chunk start')
-    deltat_want = Float.T(optional=True)
-
-    highpass = Float.T(optional=True)
-    lowpass = Float.T(optional=True)
-
-    highpass_order = Int.T(default=4, optional=True)
-    lowpass_order = Int.T(default=4, optional=True)
-
     def preprocess(self, tr):
         '''Trace preprocessing
 
@@ -406,11 +393,13 @@ class DataGenerator(DataGeneratorBase):
         filter_function = self.get_filter_function()
         filter_function(tr)
 
-        if self.deltat_want is not None:
-            if tr.deltat - self.deltat_want > EPSILON:
-                tr.resample(self.deltat_want)
-            elif tr.deltat - self.deltat_want < -EPSILON:
-                tr.downsample_to(self.deltat_want)
+        dt_want = self.config.deltat_want
+
+        if dt_want is not None:
+            if tr.deltat - dt_want > EPSILON:
+                tr.resample(dt_want)
+            elif tr.deltat - dt_want < -EPSILON:
+                tr.downsample_to(dt_want)
 
     @lru_cache(maxsize=1)
     def get_filter_function(self):
@@ -418,19 +407,19 @@ class DataGenerator(DataGeneratorBase):
         filters to :py:class:`pyrocko.trace.Trace` instances.
         '''
         functions = []
-        if self.highpass is not None:
+        if self.config.highpass is not None:
             functions.append(lambda tr: tr.highpass(
-                corner=self.highpass,
-                order=self.highpass_order))
-        if self.lowpass is not None:
+                corner=self.config.highpass,
+                order=self.config.highpass_order))
+        if self.config.lowpass is not None:
             functions.append(lambda tr: tr.lowpass(
-                corner=self.lowpass,
-                order=self.lowpass_order))
+                corner=self.config.lowpass,
+                order=self.config.lowpass_order))
 
         def fn(t):
             for f in functions:
                 f(t)
-            if self.absolute:
+            if self.config.absolute:
                 t.ydata = num.abs(t.ydata)
 
         return fn
@@ -452,7 +441,7 @@ class DataGenerator(DataGeneratorBase):
         :param tref: absolute time where to chop the data chunk. Typically first
             p phase onset'''
         indices = indices or range(len(traces))
-        tref = tref - self.tpad
+        tref = tref - self.config.tpad
         for i, tr in zip(indices, traces):
             data_len = len(tr.ydata)
             istart_trace = int((tr.tmin - tref) / tr.deltat)
@@ -489,11 +478,11 @@ class PileData(DataGenerator):
         if self.data_pile.is_empty():
             sys.exit('Data pile is empty!')
 
-        self.deltat_want = self.deltat_want or \
+        self.deltat_want = self.config.deltat_want or \
                 min(self.data_pile.deltats.keys())
 
         self.n_samples = int(
-                (self.config.sample_length + self.tpad) / self.deltat_want)
+                (self.config.sample_length + self.config.tpad) / self.deltat_want)
 
         logger.debug('loading markers')
         markers = marker.load_markers(self.fn_markers)
@@ -543,9 +532,9 @@ class PileData(DataGenerator):
         tr_len = self.n_samples * self.deltat_want
         nslc_to_index = self.nslc_to_index
 
-        tpad = self.tpad
-        if self.highpass is not None:
-            tpad += 0.5 / self.highpass
+        tpad = self.config.tpad
+        if self.config.highpass is not None:
+            tpad += 0.5 / self.config.highpass
 
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
@@ -586,8 +575,8 @@ class SeismosizerData(DataGenerator):
 
         filter_oob(self.sources, self.targets, self.store.config)
 
-        dt = self.deltat_want or self.store.config.deltat
-        self.n_samples = int((self.sample_length + self.tpad) / dt)
+        dt = self.config.deltat_want or self.store.config.deltat
+        self.n_samples = int((self.sample_length + self.config.tpad) / dt)
         self.tensor_shape = (len(self.targets), self.n_samples)
 
     def extract_labels(self, source):
