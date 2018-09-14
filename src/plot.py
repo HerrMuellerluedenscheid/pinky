@@ -60,8 +60,6 @@ def show_data(model, shuffle=False):
 
     fig_w, axs_w_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
     axs_w = flatten(axs_w_grid)
-    # model.config.data_generator.setup()
-    # model.config.evaluation_data_generator.setup()
 
     model.config.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
@@ -77,8 +75,9 @@ def show_data(model, shuffle=False):
                 0, 0, string, size=7,
                 transform=axs[i].transAxes, bbox=boxstyle)
 
-        n_channels, n_samples = chunk.shape
+        _, n_samples = chunk.shape
         xdata = num.arange(n_samples)
+
         for irow, row in enumerate(chunk):
             row -= num.mean(row)
             axs_w[i].plot(xdata, irow+yscale*row, color='grey', linewidth=0.5)

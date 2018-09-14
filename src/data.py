@@ -9,7 +9,7 @@ from pyrocko.gui import marker
 from pyrocko.gf.seismosizer import Engine, Target, LocalEngine, Source
 from pyrocko import orthodrome
 from pyrocko import pile
-# from swarm import synthi, source_region
+
 from collections import defaultdict, OrderedDict
 from functools import lru_cache
 from pyrocko import util
@@ -165,8 +165,6 @@ class DataGeneratorBase(Object):
 
     def setup(self):
         ...
-        # if self.noise is None:
-        #     self.noise = Noise()
 
     @property
     def tensor_shape(self):
@@ -223,15 +221,33 @@ class DataGeneratorBase(Object):
         '''Return data types of features and labels'''
         return tf.float32, tf.float32
 
-    def generate(self):
+    def unpack_examples(self, record_iterator):
+        '''Parse examples stored in TFRecordData to `tf.train.Example`'''
+        for string_record in record_iterator:
+            example = tf.train.Example()
+            example.ParseFromString(string_record)
+            chunk = example.features.feature['data'].bytes_list.value[0]
+            label = example.features.feature['label'].bytes_list.value[0]
+
+            chunk = num.fromstring(chunk, dtype=num.float32)
+            chunk = chunk.reshape((self.config.n_channels, -1))
+
+            label = num.fromstring(label, dtype=num.float32)
+            yield chunk, label
+
+    def iter_examples_and_labels(self):
         record_iterator = tf.python_io.tf_record_iterator(
             path=self.fn_tfrecord)
 
         return self.unpack_examples(record_iterator)
 
+    def generate(self):
+        for example, label in self.iter_examples_and_labels():
+            yield self.process_chunk(example), label
+
     def iter_labels(self):
         '''Iterate through labels.'''
-        for _, label in self.generate():
+        for _, label in self.iter_examples_and_labels():
             yield label
     
     @property
@@ -253,7 +269,7 @@ class DataGeneratorBase(Object):
 
     def pack_examples(self):
         '''Serialize Examples to strings.'''
-        for ydata, label in self.generate():
+        for ydata, label in self.iter_examples_and_labels():
             yield tf.train.Example(
                 features=tf.train.Features(
                     feature={
@@ -264,8 +280,6 @@ class DataGeneratorBase(Object):
 
     def mask(self, chunk):
         '''For data augmentation: Mask traces in chunks'''
-        if not self.config.imputation:
-            return
         indices = self.nsl_indices
         a = num.random.random(len(indices))
         i = num.where(a < self.station_dropout_rate)[0]
@@ -293,20 +307,6 @@ class DataGeneratorBase(Object):
         chunk /= num.max(chunk)
 
         return chunk
-
-    def unpack_examples(self, record_iterator):
-        '''Parse examples stored in TFRecordData to `tf.train.Example`'''
-        for string_record in record_iterator:
-            example = tf.train.Example()
-            example.ParseFromString(string_record)
-            chunk = example.features.feature['data'].bytes_list.value[0]
-            label = example.features.feature['label'].bytes_list.value[0]
-
-            chunk = num.fromstring(chunk, dtype=num.float32)
-            chunk = chunk.reshape((self.config.n_channels, -1))
-
-            label = num.fromstring(label, dtype=num.float32)
-            yield self.process_chunk(chunk), label
 
     def write(self, directory):
         '''Write example data to TFRecordDataset using `self.writer`.'''
@@ -343,15 +343,19 @@ class ChannelStackGenerator(DataGeneratorBase):
         return d
 
     @property
+    def tensor_shape(self):
+        return (len(self.nslc_to_index), self.config.tensor_shape[1])
+
+    @property
     def output_shapes(self):
         '''Return a tuple containing the shape of feature arrays and number of
         labels.
         '''
         return (self.tensor_shape, self.n_classes)
 
-    def generate(self):
+    def iter_examples_and_labels(self):
         d = self.nslc_to_index
-        for feature, label in self.in_generator.generate():
+        for feature, label in self.in_generator.iter_examples_and_labels():
             chunk = self.get_raw_data_chunk(shape=self.tensor_shape)
             for nsl, indices in self.nsl_to_indices_orig.items():
                 chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
@@ -416,6 +420,7 @@ class DataGenerator(DataGeneratorBase):
         n, e = orthodrome.latlon_to_ne(
             self.config.reference_target.lat, self.config.reference_target.lon,
             source.lat, source.lon)
+
         return (n, e, source.depth)
 
     def fit_data_into_chunk(self, traces, chunk, indices=None, tref=0):
@@ -442,11 +447,10 @@ class DataGenerator(DataGeneratorBase):
                     + istart_trace]
             chunk[i, istart_array: istart_array+ydata.shape[0]] = ydata
 
-        i_mask = num.isnan(chunk)
-        i_unmask = num.logical_not(i_mask)
-        chunk[i_unmask] /= (num.nanmax(num.abs(chunk)) * 2.)
-        chunk[i_unmask] += 0.5
-        return chunk
+        # i_unmask = num.logical_not(num.isnan(chunk))
+        # chunk[i_unmask] = (num.nanmax(num.abs(chunk)) * 2.)
+        # chunk[i_unmask] += 0.5
+        # return chunk
 
 
 class PileData(DataGenerator):
@@ -515,8 +519,7 @@ class PileData(DataGenerator):
         for m in self.markers:
             yield self.extract_labels(m)
 
-    def generate(self):
-        self.setup()
+    def iter_examples_and_labels(self):
         tr_len = self.n_samples * self.deltat_want
         nslc_to_index = self.nslc_to_index
 
@@ -540,7 +543,7 @@ class PileData(DataGenerator):
                 chunk = self.get_raw_data_chunk(self.tensor_shape)
                 self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=m.tmin)
 
-                yield self.process_chunk(chunk), self.extract_labels(m)
+                yield chunk, self.extract_labels(m)
 
 
 class SeismosizerData(DataGenerator):
@@ -570,8 +573,7 @@ class SeismosizerData(DataGenerator):
     def extract_labels(self, source):
         return (source.north_shift, source.east_shift, source.depth)
 
-    def generate(self):
-        self.setup()
+    def iter_examples_and_labels(self):
         response = self.engine.process(
             sources=self.sources,
             targets=self.targets)
@@ -588,5 +590,4 @@ class SeismosizerData(DataGenerator):
             chunk = self.get_raw_data_chunk(self.tensor_shape)
 
             self.fit_data_into_chunk(traces, chunk=chunk, tref=tref+source.time)
-
-            yield self.process_chunk(chunk), self.extract_labels(source)
+            yield chunk, self.extract_labels(source)
