@@ -326,7 +326,6 @@ class DataGeneratorBase(Object):
         '''Write example data to TFRecordDataset using `self.writer`.'''
         logger.debug('writing TFRecordDataset: %s' % directory)
         writer = tf.python_io.TFRecordWriter(directory)
-        writer.write()
 
         for ex in self.pack_examples():
             writer.write(ex.SerializeToString())
