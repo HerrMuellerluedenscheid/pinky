@@ -27,7 +27,7 @@ from .util import delete_if_exists, first_element, filter_oob
 
 
 pjoin = os.path.join
-EPSILON = 1E-4
+EPSILON = 1E-9
 
 
 logger = logging.getLogger(__name__)
@@ -53,11 +53,12 @@ class NormalizeMax(Normalization):
 
 class NormalizeLog(Normalization):
     def __call__(self, chunk):
-        mean = num.nanmean(chunk)
-        chunk -= mean 
-        sign = num.sign(chunk)
+        chunk -= num.nanmedian(chunk)
+        # sign = num.sign(chunk)
 
         chunk[:] = num.log(num.abs(chunk)+EPSILON)
+        # chunk /= num.std(chunk)
+        # chunk /= num.nanmax(chunk)
         # chunk *= sign
         # chunk += mean
 
@@ -76,10 +77,7 @@ class NormalizeNthRoot(Normalization):
 
 class NormalizeChannelMax(Normalization):
     def __call__(self, chunk):
-        trace_levels = num.nanmean(chunk, axis=1)[:, num.newaxis]
-        chunk -= trace_levels
-        chunk /= (num.nanmax(num.abs(chunk), axis=1)[:, num.newaxis]) * 2.
-        chunk += trace_levels
+        chunk /= ((num.nanmax(num.abs(chunk), axis=1)[:, num.newaxis]) + EPSILON )
 
 
 class NormalizeStd(Normalization):
@@ -91,7 +89,6 @@ class NormalizeStd(Normalization):
         chunk -= trace_levels
 
         # normalize
-        # chunk /= num.std(chunk, axis=1)
         chunk /= num.std(chunk)
 
         # restore mean levels
@@ -136,10 +133,22 @@ class ImputationZero(Imputation):
         return 0.
 
 
+class ImputationMin(Imputation):
+
+    def __call__(self, chunk):
+        return num.nanmin(chunk) + EPSILON
+
+
 class ImputationMean(Imputation):
 
     def __call__(self, chunk):
-        return num.nanmean(chunk).astype(num.float32)
+        return num.nanmean(chunk) + EPSILON
+
+
+class ImputationMedian(Imputation):
+
+    def __call__(self, chunk):
+        return num.nanmedian(chunk) + EPSILON
 
 
 class DataGeneratorBase(Object):
@@ -149,7 +158,7 @@ class DataGeneratorBase(Object):
     TFRecordDatasets.
     '''
     fn_tfrecord = String.T(optional=True)
-    noise = Noise.T(default=Noise(), optional=True, help='Add noise to feature')
+    noise = Noise.T(optional=True, help='Add noise to feature')
 
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
@@ -243,6 +252,11 @@ class DataGeneratorBase(Object):
 
     def generate(self):
         for example, label in self.iter_examples_and_labels():
+
+            if num.all(num.isnan(example)):
+                logger.debug('all NAN. skipping...')
+                continue
+
             yield self.process_chunk(example), label
 
     def iter_labels(self):
@@ -291,11 +305,6 @@ class DataGeneratorBase(Object):
         '''Probably better move this to the tensorflow side for better
         performance.'''
 
-        # fill gaps
-        if self.config.imputation:
-            chunk[num.isnan(chunk)] = self.config.imputation(chunk)
-            self.mask(chunk)
-
         # add noise
         if self.noise:
             self.noise(chunk)
@@ -303,7 +312,19 @@ class DataGeneratorBase(Object):
         # apply normalization
         self.config.normalization(chunk)
 
-        # finally, ensure data range:
+        # fill gaps
+        if self.config.imputation:
+            gaps = num.isnan(chunk)
+            chunk[gaps] = self.config.imputation(chunk)
+            self.mask(chunk)
+
+        # LEVEL
+        #  print('test leveling') ---------------------------
+        if num.any(num.isnan(chunk)):
+            logger.warn('NANs left in chunk')
+            print(num.all(num.isnan(chunk)))
+
+        chunk -= num.min(chunk)
         chunk /= num.max(chunk)
 
         return chunk
@@ -527,6 +548,9 @@ class PileData(DataGenerator):
         if self.config.highpass is not None:
             tpad += 0.5 / self.config.highpass
 
+        # compensate label for median offsets
+        median_offsets = num.median(num.array(list(self.iter_labels())), axis=0)
+
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
 
@@ -543,7 +567,7 @@ class PileData(DataGenerator):
                 chunk = self.get_raw_data_chunk(self.tensor_shape)
                 self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=m.tmin)
 
-                yield chunk, self.extract_labels(m)
+                yield chunk, self.extract_labels(m) - median_offsets
 
 
 class SeismosizerData(DataGenerator):
