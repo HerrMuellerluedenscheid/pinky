@@ -54,6 +54,9 @@ class Layer(Object):
     def visualize_kernel(self, estimator, index=0, save_path=None):
         logger.debug('not implemented')
 
+    def chain(self, **kwargs):
+        pass
+
 
 class CNNLayer(Layer):
     kernel_width = Int.T()
@@ -64,7 +67,7 @@ class CNNLayer(Layer):
 
     _initializer = None
 
-    def chain(self, input, training=False):
+    def chain(self, input, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
@@ -88,12 +91,15 @@ class CNNLayer(Layer):
                 'post-%s' % self.name, tf.split(
                     input, num_or_size_splits=self.n_filters, axis=-1)[0])
 
+        input = tf.layers.dropout(
+            input, rate=dropout_rate, training=training)
+
         # Batch normalization
         input = tf.layers.batch_normalization(input, training=training)
 
         return input
 
-    def visualize_kernel(self, estimator, index=0, save_path=None):
+    def visualize_kernel(self, estimator, index=0, save_path=None, **kwargs):
         save_name = pjoin(save_path, 'kernel-%s.pdf' % self.name)
         weights = estimator.get_variable_value('%s/kernel' % self.name)
         plot.show_kernels(weights[:, :, index, ...], name=save_name)
@@ -101,7 +107,7 @@ class CNNLayer(Layer):
 
 class DenseLayer(Layer):
 
-    def chain(self, input, training=False):
+    def chain(self, input, training=False, **kwargs):
         fc = tf.contrib.layers.flatten(input)
         # Batch normalization
         # input = tf.layers.batch_normalization(input, training=training)
@@ -189,29 +195,34 @@ class Model(Object):
         input = tf.layers.batch_normalization(input, training=training)
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
-            input = layer.chain(input=input, training=training)
-            input = tf.layers.dropout(
-                input, rate=self.dropout_rate, training=training)
+            input = layer.chain(input=input, training=training,
+                    dropout_rate=self.dropout_rate)
+            # input = tf.layers.dropout(
+            #     input, rate=self.dropout_rate, training=training)
 
         predictions = input
-        tf.summary.tensor_summary('predictions', predictions)
+
+        # WARUM SIND SO VIELE PREDICTIONS = 0?
+        # tf.summary.tensor_summary('predictions', predictions)
 
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
-
+        labels = tf.Print(labels, [labels])
+        predictions = tf.Print(predictions, [predictions])
         errors = tf.abs(predictions - labels)
         variable_summaries(errors[0], 'error_abs_x')
         variable_summaries(errors[1], 'error_abs_y')
         variable_summaries(errors[2], 'error_abs_z')
 
-        loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=1, keepdims=False))
+        loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=0,
+            keepdims=False))
+        loss_carthesian = tf.Print(loss_carthesian, [tf.shape(loss_carthesian)], 'cart')
         variable_summaries(loss_carthesian, 'training_loss')
         loss_ = tf.reduce_mean(loss_carthesian)
 
-        # loss, _ = tf.metrics.root_mean_squared_error(labels, predictions)
         loss = tf.losses.mean_squared_error(labels, predictions)
-        tf.summary.scalar('loss_old', loss_)
-        tf.summary.scalar('loss_cart', loss)
+        tf.summary.scalar('mean_loss_cart', loss_)
+        # tf.summary.scalar('loss_cart', loss)
         # loss_ = loss.eval(session=self.sess)
         # num.savetxt(loss_, 'xxx')
         tf.summary.scalar('loss', loss)
