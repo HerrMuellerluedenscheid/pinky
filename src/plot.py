@@ -121,6 +121,20 @@ def show_data(model, shuffle=False):
     plt.show()
 
 
+def show_kernels_dense(weights, name=None):
+    fig, axs = plt.subplots(1, 1)
+
+    axs.imshow(weights, cmap='gray')
+    axs.axis('off')
+    axs.set_yticks([])
+    axs.set_xticks([])
+
+    if name:
+        fig.savefig(name)
+    else:
+        plt.show()
+
+
 def show_kernels(weights, name=None):
     n_columns = 8
     n_weights = weights.shape[-1]
@@ -133,6 +147,7 @@ def show_kernels(weights, name=None):
         axs[iweight].imshow(weights[..., iweight], cmap='gray')
     
     for ax in axs:
+        ax.axis('off')
         ax.set_yticks([])
         ax.set_xticks([])
 
