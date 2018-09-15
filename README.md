@@ -43,3 +43,5 @@ Notes
  - `batch_norm` is super important. Without, learning will get stuck at approx.
    500m x-error, y-error and z-error (in each domain!)
  - After waveform filtering (2-30Hz) results become worse. Why?
+ - conv2D init set to None (Uses glorot (?)) smaller errors then
+     truncated_normal(std=0.1)

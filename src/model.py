@@ -58,14 +58,16 @@ class Layer(Object):
 class CNNLayer(Layer):
     kernel_width = Int.T()
     kernel_height = Int.T(optional=True)
-    _initializer = tf.truncated_normal_initializer(
-            mean=0.1, stddev=0.1)
+
+    pool_width = Int.T()
+    pool_height = Int.T()
+
+    _initializer = None
 
     def chain(self, input, training=False):
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
-        pool_height = self.kernel_height if self.kernel_height else 1
         kernel_height = self.kernel_height or n_channels
 
         input = tf.layers.conv2d(
@@ -74,17 +76,20 @@ class CNNLayer(Layer):
             kernel_size=(kernel_height, self.kernel_width),
             activation=self.get_activation(),
             kernel_initializer=self._initializer,  # Test
-            bias_initializer=self._initializer,
+            strides=(1, 2),
             name=self.name)
 
         input = tf.layers.max_pooling2d(input,
-            pool_size=(pool_height, self.kernel_width),
+            pool_size=(self.pool_width, self.pool_height),
             strides=(1, 1), name=self.name+'maxpool')
-        
+
         if logger.getEffectiveLevel() == logging.DEBUG:
             tf.summary.image(
                 'post-%s' % self.name, tf.split(
                     input, num_or_size_splits=self.n_filters, axis=-1)[0])
+
+        # Batch normalization
+        input = tf.layers.batch_normalization(input, training=training)
 
         return input
 
@@ -98,8 +103,15 @@ class DenseLayer(Layer):
 
     def chain(self, input, training=False):
         fc = tf.contrib.layers.flatten(input)
+        # Batch normalization
+        # input = tf.layers.batch_normalization(input, training=training)
         return tf.layers.dense(fc, self.n_filters, name=self.name,
                 activation=self.get_activation())
+
+    def visualize_kernel(self, estimator, index=0, save_path=None):
+        save_name = pjoin(save_path, 'kernel-%s.pdf' % self.name)
+        weights = estimator.get_variable_value('%s/kernel' % self.name)
+        plot.show_kernels_dense(weights, name=save_name)
 
 
 class Model(Object):
@@ -167,22 +179,19 @@ class Model(Object):
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
-        # It's impo
-        input = tf.reshape(features, [-1, *self.config.data_generator.tensor_shape,  1])
-        # input = tf.reshape(features, [self.batch_size,
-        #     self.config.data_generator.tensor_shape[0], -1,  1])
+        input = tf.reshape(
+                features, [-1, *self.config.data_generator.tensor_shape,  1])
 
         # CHEKC BATCH SIZE@!!!!!!
         # input = tf.reshape(features, [-1,
         #     *self.config.data_generator.tensor_shape,  self.batch_size])
 
+        input = tf.layers.batch_normalization(input, training=training)
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
             input = layer.chain(input=input, training=training)
-
-        # fc = tf.layers.dropout(
-        #     input, rate=self.dropout_rate, training=training)
-        # fc = tf.layers.batch_normalization(fc, training=training)
+            input = tf.layers.dropout(
+                input, rate=self.dropout_rate, training=training)
 
         predictions = input
         tf.summary.tensor_summary('predictions', predictions)
@@ -191,23 +200,24 @@ class Model(Object):
         labels = tf.transpose(labels)
 
         errors = tf.abs(predictions - labels)
-
         variable_summaries(errors[0], 'error_abs_x')
         variable_summaries(errors[1], 'error_abs_y')
         variable_summaries(errors[2], 'error_abs_z')
 
-        # loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=1, keepdims=False))
-        # variable_summaries(loss_carthesian, 'training_loss')
-        # loss = tf.reduce_mean(loss_carthesian)
+        loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=1, keepdims=False))
+        variable_summaries(loss_carthesian, 'training_loss')
+        loss_ = tf.reduce_mean(loss_carthesian)
 
+        # loss, _ = tf.metrics.root_mean_squared_error(labels, predictions)
         loss = tf.losses.mean_squared_error(labels, predictions)
+        tf.summary.scalar('loss_old', loss_)
+        tf.summary.scalar('loss_cart', loss)
         # loss_ = loss.eval(session=self.sess)
         # num.savetxt(loss_, 'xxx')
         tf.summary.scalar('loss', loss)
         if mode == tf.estimator.ModeKeys.TRAIN:
-            optimizer = tf.train.AdamOptimizer(
-                    learning_rate=params.get('learning_rate', 1e-4))
-                    # learning_rate=params.get('learning_rate', 0.0009))
+            optimizer = tf.train.AdamOptimizer()
+                    # learning_rate=params.get('learning_rate', 1e-4))
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
                 train_op = optimizer.minimize(
@@ -228,7 +238,6 @@ class Model(Object):
                             logging_hook,])
 
         elif mode == tf.estimator.ModeKeys.EVAL:
-
             metrics = {
                     'rmse_eval': tf.metrics.root_mean_squared_error(
                 labels=labels, predictions=predictions, name='rmse_eval'),
@@ -275,7 +284,11 @@ class Model(Object):
                     input_fn=self.generate_eval_dataset,
                     steps=None)
 
-            return tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
+            result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
+
+        self.save_kernels()
+
+        return result
 
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...'''
@@ -440,7 +453,6 @@ def main():
         else:
             model.train_and_evaluate()
             # model.train()
-        model.save_kernels()
     elif args.restore:
         model.restore()
 
