@@ -5,6 +5,11 @@ import logging
 logger = logging.getLogger()
 
 
+def ensure_dir(p):
+    if not os.path.exists(p):
+        os.makedirs(p)
+
+
 def first_element(x):
     if len(x) <= 1:
         return x[0]

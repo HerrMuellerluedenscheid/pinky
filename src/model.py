@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 from .data import *
 from .tf_util import *
-from .util import delete_if_exists
+from .util import delete_if_exists, ensure_dir
 from . import plot
 from .config import PinkyConfig
 from .optimize import Optimizer
@@ -40,32 +40,34 @@ class DumpHook(tf.train.SessionRunHook):
 
 
 class Layer(Object):
-    name = String.T()
-    n_filters = Int.T()
-
+    '''A 2D CNN followed by dropout and batch normalization'''
+    
+    name = String.T(help='Identifies the model')
+    n_filters = Int.T(help='Number of output filters')
     activation = String.T(
-            default='relu', help='activation function of tf.nn') # test
-    # leaky relu
+            default='leaky_relu', help='activation function of tf.nn')
 
     def get_activation(self):
         '''Return activation function from tensorflow.nn'''
         return getattr(tf.nn, self.activation)
 
     def visualize_kernel(self, estimator, index=0, save_path=None):
+        '''Subclass this method for plotting kernels.'''
         logger.debug('not implemented')
 
-    def chain(self, **kwargs):
+    def chain(self, input, training=False, **kwargs):
+        '''Subclass this method to attach the layer to a sequential model.'''
         pass
 
 
 class CNNLayer(Layer):
+
+    '''A 2D CNN followed by dropout and batch normalization'''
     kernel_width = Int.T()
     kernel_height = Int.T(optional=True)
 
     pool_width = Int.T()
     pool_height = Int.T()
-
-    _initializer = None
 
     def chain(self, input, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
@@ -78,8 +80,8 @@ class CNNLayer(Layer):
             filters=self.n_filters,
             kernel_size=(kernel_height, self.kernel_width),
             activation=self.get_activation(),
-            kernel_initializer=self._initializer,  # Test
-            strides=(1, 2),
+            strides=(1, 1),
+            # strides=(1, 2),
             name=self.name)
 
         input = tf.layers.max_pooling2d(input,
@@ -94,10 +96,7 @@ class CNNLayer(Layer):
         input = tf.layers.dropout(
             input, rate=dropout_rate, training=training)
 
-        # Batch normalization
-        input = tf.layers.batch_normalization(input, training=training)
-
-        return input
+        return tf.layers.batch_normalization(input, training=training)
 
     def visualize_kernel(self, estimator, index=0, save_path=None, **kwargs):
         save_name = pjoin(save_path, 'kernel-%s.pdf' % self.name)
@@ -108,10 +107,8 @@ class CNNLayer(Layer):
 class DenseLayer(Layer):
 
     def chain(self, input, training=False, **kwargs):
-        fc = tf.contrib.layers.flatten(input)
-        # Batch normalization
-        # input = tf.layers.batch_normalization(input, training=training)
-        return tf.layers.dense(fc, self.n_filters, name=self.name,
+        input = tf.contrib.layers.flatten(input)
+        return tf.layers.dense(input, self.n_filters, name=self.name,
                 activation=self.get_activation())
 
     def visualize_kernel(self, estimator, index=0, save_path=None):
@@ -128,6 +125,7 @@ class Model(Object):
 
     config = PinkyConfig.T()
     hyperparameter_optimizer = Optimizer.T(optional=True)
+    learning_rate = Float.T(optional=True)
     dropout_rate = Float.T(default=0.01)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
@@ -141,7 +139,7 @@ class Model(Object):
 
     tf.logging.set_verbosity(tf.logging.INFO)
 
-    layers = List.T(Layer.T(), help='Define the model')
+    layers = List.T(Layer.T(), help='A list of `Layers` instances.')
 
     def __init__(self, tf_config=None, **kwargs):
         super().__init__(**kwargs)
@@ -153,24 +151,29 @@ class Model(Object):
         self.est = None
 
     def extend_path(self, p):
+        '''Append subdirectory to path `p` named by the model.'''
         return os.path.join(p, self.name)
 
     def get_summary_outdir(self):
+        '''Return the directory where to store the summary.'''
         return self.extend_path(self.summary_outdir)
 
     def get_outdir(self):
+        '''Return the directory where to store the model.'''
         return self.extend_path(self.outdir)
 
     def clear(self):
-        ''' Delete summary and model directories.'''
+        '''Delete summary and model directories.'''
         delete_if_exists(self.get_summary_outdir())
         delete_if_exists(self.get_outdir())
 
     def generate_eval_dataset(self):
+        '''Generator of evaluation dataset.'''
         return self.config.evaluation_data_generator.get_dataset().batch(
                 self.batch_size)
 
     def generate_dataset(self):
+        '''Generator of training dataset.'''
         dataset = self.config.data_generator.get_dataset()
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
@@ -178,6 +181,7 @@ class Model(Object):
         return dataset.repeat(count=self.n_epochs).batch(self.batch_size)
 
     def model(self, features, labels, mode, params):
+        '''Setup the model.'''
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
         if self.debug: 
@@ -188,27 +192,16 @@ class Model(Object):
         input = tf.reshape(
                 features, [-1, *self.config.data_generator.tensor_shape,  1])
 
-        # CHEKC BATCH SIZE@!!!!!!
-        # input = tf.reshape(features, [-1,
-        #     *self.config.data_generator.tensor_shape,  self.batch_size])
-
         input = tf.layers.batch_normalization(input, training=training)
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
             input = layer.chain(input=input, training=training,
                     dropout_rate=self.dropout_rate)
-            # input = tf.layers.dropout(
-            #     input, rate=self.dropout_rate, training=training)
 
-        predictions = input
-
-        # WARUM SIND SO VIELE PREDICTIONS = 0?
-        # tf.summary.tensor_summary('predictions', predictions)
-
+        # Final layer
+        predictions = tf.layers.dense(input, self.config.n_classes, name='output')
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
-        labels = tf.Print(labels, [labels])
-        predictions = tf.Print(predictions, [predictions])
         errors = tf.abs(predictions - labels)
         variable_summaries(errors[0], 'error_abs_x')
         variable_summaries(errors[1], 'error_abs_y')
@@ -216,7 +209,6 @@ class Model(Object):
 
         loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=0,
             keepdims=False))
-        loss_carthesian = tf.Print(loss_carthesian, [tf.shape(loss_carthesian)], 'cart')
         variable_summaries(loss_carthesian, 'training_loss')
         loss_ = tf.reduce_mean(loss_carthesian)
 
@@ -227,8 +219,7 @@ class Model(Object):
         # num.savetxt(loss_, 'xxx')
         tf.summary.scalar('loss', loss)
         if mode == tf.estimator.ModeKeys.TRAIN:
-            optimizer = tf.train.AdamOptimizer()
-                    # learning_rate=params.get('learning_rate', 1e-4))
+            optimizer = tf.train.AdamOptimizer(self.learning_rate)
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
                 train_op = optimizer.minimize(
@@ -271,6 +262,7 @@ class Model(Object):
 
         elif mode == tf.estimator.ModeKeys.PREDICT:
             ...
+    
 
     def get_summary_hook(self, subdir=''):
         return tf.train.SummarySaverHook(
@@ -283,7 +275,6 @@ class Model(Object):
     def train_and_evaluate(self, params=None):
         params = params or {}
         with self.sess as default:
-
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir(), params=params)
 
@@ -298,8 +289,18 @@ class Model(Object):
             result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
 
         self.save_kernels()
+        # self.save_activation_maps()
 
         return result
+
+    def predict(self):
+        with self.sess as default:
+            self.est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.get_outdir(), params=params)
+
+            result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
+
+        
 
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...'''
@@ -330,13 +331,16 @@ class Model(Object):
     def save_kernels(self, index=0):
         '''save weight kernels of all layers (at index=`index`).'''
         save_path = os.path.join(self.get_summary_outdir(), 'kernels')
-
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-
+        ensure_dir(save_path)
         logger.info('Storing weight matrices at %s' % save_path)
         for layer in self.layers:
             layer.visualize_kernel(self.est, save_path=save_path)
+
+    def save_activation_maps(self, index=0):
+        save_path = os.path.join(self.get_summary_outdir(), 'kernels')
+        ensure_dir(save_path)
+        for layer in self.layers:
+            plot.getActivations(layer, stimuli)
 
     def restore(self):
         # tf.reset_default_graph()
