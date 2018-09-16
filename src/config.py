@@ -24,6 +24,7 @@ class PinkyConfig(Object):
 
     data_generator = DataGeneratorBase.T()
     evaluation_data_generator = DataGeneratorBase.T()
+    prediction_data_generator = DataGeneratorBase.T(optional=True)
     normalization = Normalization.T(default=Normalization(), optional=True)
     imputation = Imputation.T(
         optional=True, help='How to mask and fill gaps')
@@ -49,10 +50,11 @@ class PinkyConfig(Object):
 
     def setup(self):
         self.data_generator.set_config(self)
+
         self.evaluation_data_generator.set_config(self)
 
-        self.data_generator.setup()
-        self.evaluation_data_generator.setup()
+        if self.prediction_data_generator:
+            self.prediction_data_generator.set_config(self)
 
         self.set_n_samples()
 

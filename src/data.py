@@ -84,7 +84,6 @@ class NormalizeStd(Normalization):
     '''Normalizes by dividing through the standard deviation'''
     def __call__(self, chunk):
         # save and subtract trace levels
-        # trace_levels = num.nanmean(chunk, axis=1)
         trace_levels = num.nanmean(chunk)
         chunk -= trace_levels
 
@@ -171,6 +170,7 @@ class DataGeneratorBase(Object):
 
     def set_config(self, pinky_config):
         self.config = pinky_config
+        self.setup()
 
     def setup(self):
         ...
@@ -245,12 +245,21 @@ class DataGeneratorBase(Object):
             yield chunk, label
 
     def iter_examples_and_labels(self):
+        '''Subclass this method!
+        
+        Yields: feature, label
+        '''
         record_iterator = tf.python_io.tf_record_iterator(
             path=self.fn_tfrecord)
 
         return self.unpack_examples(record_iterator)
 
     def generate(self):
+        '''Takes the output of `iter_examples_and_labels` and applies post
+        processing (see: `process_chunk`).
+        
+        Chunks that are all NAN will be skipped.
+        '''
         for example, label in self.iter_examples_and_labels():
 
             if num.all(num.isnan(example)):
@@ -258,6 +267,10 @@ class DataGeneratorBase(Object):
                 continue
 
             yield self.process_chunk(example), label
+
+    def extract_labels(self):
+        '''Overwrite this method!'''
+        ...
 
     def iter_labels(self):
         '''Iterate through labels.'''
@@ -549,7 +562,7 @@ class PileData(DataGenerator):
             tpad += 0.5 / self.config.highpass
 
         # compensate label for median offsets
-        median_offsets = num.median(num.array(list(self.iter_labels())), axis=0)
+        # median_offsets = num.median(num.array(list(self.iter_labels())), axis=0)
 
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
@@ -567,7 +580,8 @@ class PileData(DataGenerator):
                 chunk = self.get_raw_data_chunk(self.tensor_shape)
                 self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=m.tmin)
 
-                yield chunk, self.extract_labels(m) - median_offsets
+                # yield chunk, self.extract_labels(m) - median_offsets
+                yield chunk, self.extract_labels(m)
 
 
 class SeismosizerData(DataGenerator):

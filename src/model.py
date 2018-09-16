@@ -125,7 +125,7 @@ class Model(Object):
 
     config = PinkyConfig.T()
     hyperparameter_optimizer = Optimizer.T(optional=True)
-    learning_rate = Float.T(optional=True)
+    learning_rate = Float.T(default=1e-3)
     dropout_rate = Float.T(default=0.01)
     batch_size = Int.T(default=10)
     n_epochs = Int.T(default=1)
@@ -172,12 +172,16 @@ class Model(Object):
         return self.config.evaluation_data_generator.get_dataset().batch(
                 self.batch_size)
 
+    def generate_predict_dataset(self):
+        '''Generator of prediction dataset.'''
+        return self.config.prediction_data_generator.get_dataset().batch(
+                self.batch_size)
+
     def generate_dataset(self):
         '''Generator of training dataset.'''
         dataset = self.config.data_generator.get_dataset()
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
-
         return dataset.repeat(count=self.n_epochs).batch(self.batch_size)
 
     def model(self, features, labels, mode, params):
@@ -201,6 +205,11 @@ class Model(Object):
         # Final layer
         predictions = tf.layers.dense(input, self.config.n_classes, name='output')
         predictions = tf.transpose(predictions) 
+
+        if mode == tf.estimator.ModeKeys.PREDICT:
+            return tf.estimator.EstimatorSpec(mode,
+                    predictions = {'xyz': predictions})
+
         labels = tf.transpose(labels)
         errors = tf.abs(predictions - labels)
         variable_summaries(errors[0], 'error_abs_x')
@@ -260,17 +269,11 @@ class Model(Object):
                         ])
             # saver.save(self.sess, '/tmp/testtt')
 
-        elif mode == tf.estimator.ModeKeys.PREDICT:
-            ...
-    
-
     def get_summary_hook(self, subdir=''):
         return tf.train.SummarySaverHook(
             self.summary_nth_step,
-            output_dir=os.path.join(self.get_summary_outdir(), subdir),
-            scaffold=tf.train.Scaffold(
-                summary_op=tf.summary.merge_all())
-        )
+            output_dir=pjoin(self.get_summary_outdir(), subdir),
+            scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()))
 
     def train_and_evaluate(self, params=None):
         params = params or {}
@@ -294,13 +297,13 @@ class Model(Object):
         return result
 
     def predict(self):
+        logger.debug('predicting...')
         with self.sess as default:
             self.est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.get_outdir(), params=params)
+                model_fn=self.model, model_dir=self.get_outdir())
 
-            result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
-
-        
+            for p in self.est.predict(input_fn=self.generate_predict_dataset):
+                print(p)
 
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...'''
@@ -360,6 +363,8 @@ def main():
                 description='')
     parser.add_argument('--config')
     parser.add_argument('--train', action='store_true')
+    parser.add_argument('--predict', action='store_true',
+            help='Predict from input of `predict_data_generator` in config.')
     parser.add_argument('--optimize', action='store_true')
     parser.add_argument('--write-tfrecord', metavar='FILENAME',
         help='write data_generator out to FILENAME')
@@ -378,6 +383,9 @@ def main():
     parser.add_argument('--force', action='store_true')
 
     args = parser.parse_args()
+
+    if args.predict and args.clear:
+        sys.exit('\nCannot `--clear` when running `--predict`')
 
     if args.debug:
         logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -468,6 +476,10 @@ def main():
         else:
             model.train_and_evaluate()
             # model.train()
+    
+    elif args.predict:
+        model.predict()
+
     elif args.restore:
         model.restore()
 

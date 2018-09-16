@@ -45,3 +45,5 @@ Notes
  - After waveform filtering (2-30Hz) results become worse. Why?
  - conv2D init set to None (Uses glorot (?)) smaller errors then
      truncated_normal(std=0.1)
+ - strides 2 vs 1 on CNN: minor improvement in mean error. Max errors get little
+   better. But it's much more expensive.
