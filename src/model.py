@@ -69,6 +69,8 @@ class CNNLayer(Layer):
     pool_width = Int.T()
     pool_height = Int.T()
 
+    strides = Tuple.T(2, Int.T(), default=(1, 1))
+
     def chain(self, input, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
 
@@ -80,8 +82,7 @@ class CNNLayer(Layer):
             filters=self.n_filters,
             kernel_size=(kernel_height, self.kernel_width),
             activation=self.get_activation(),
-            strides=(1, 1),
-            # strides=(1, 2),
+            strides=self.strides,
             name=self.name)
 
         input = tf.layers.max_pooling2d(input,

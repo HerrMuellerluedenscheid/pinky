@@ -165,8 +165,13 @@ class DataGeneratorBase(Object):
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
-
         self.n_classes = 3
+
+    def normalize_label(self, label):
+        return label / self.config.label_scale
+
+    def denormalize_label(self, label):
+        return label * self.config.label_scale
 
     def set_config(self, pinky_config):
         self.config = pinky_config
@@ -561,9 +566,6 @@ class PileData(DataGenerator):
         if self.config.highpass is not None:
             tpad += 0.5 / self.config.highpass
 
-        # compensate label for median offsets
-        # median_offsets = num.median(num.array(list(self.iter_labels())), axis=0)
-
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
 
@@ -580,8 +582,10 @@ class PileData(DataGenerator):
                 chunk = self.get_raw_data_chunk(self.tensor_shape)
                 self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=m.tmin)
 
-                # yield chunk, self.extract_labels(m) - median_offsets
-                yield chunk, self.extract_labels(m)
+                label = self.extract_labels(m)
+                # label = self.normalizate_label(label)
+
+                yield chunk, label
 
 
 class SeismosizerData(DataGenerator):
@@ -628,4 +632,8 @@ class SeismosizerData(DataGenerator):
             chunk = self.get_raw_data_chunk(self.tensor_shape)
 
             self.fit_data_into_chunk(traces, chunk=chunk, tref=tref+source.time)
-            yield chunk, self.extract_labels(source)
+
+            label = self.extract_labels(source)
+            # label = self.normalize_label(label)
+
+            yield chunk, label

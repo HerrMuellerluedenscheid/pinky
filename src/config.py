@@ -1,8 +1,9 @@
-import tensorflow as tf
 import os
 import logging
-from pyrocko.guts import Object, Float, Int, String, Bool, List, Tuple
+import tensorflow as tf
+import numpy as num
 
+from pyrocko.guts import Object, Float, Int, String, Bool, List, Tuple
 from pyrocko.pile import make_pile
 from pyrocko.gf.seismosizer import Target
 
@@ -43,6 +44,9 @@ class PinkyConfig(Object):
     highpass_order = Int.T(default=4, optional=True)
     lowpass_order = Int.T(default=4, optional=True)
 
+    normalize_labels = Bool.T(default=False,
+        help='Normalize labels by std')
+
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
     tpad = Float.T(default=0.,
             help='padding between p phase onset and data chunk start')
@@ -66,6 +70,13 @@ class PinkyConfig(Object):
 
         self.data_generator.setup()
         self.evaluation_data_generator.setup()
+
+        if self.normalize_labels:
+            self.label_scale = num.std(
+                    num.array(list(
+                        self.evaluation_data_generator.iter_labels())), axis=0)
+        else:
+            self.label_scale = num.ones(3, dtype=num.float32)
 
     def set_n_samples(self):
         '''Set number of sampes (n_samples) from first example of data
