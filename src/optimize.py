@@ -1,4 +1,5 @@
 import os
+import shutil
 import tensorflow as tf
 from .util import delete_if_exists
 from skopt import gp_minimize
@@ -42,7 +43,9 @@ class Optimizer(Object):
         super().__init__(**kwargs)
         self.model = None
         self.result = None
+        self.best_model_dir = self.extend_path('best-model')
         self.fn_result = self.extend_path('result.optmz')
+        self.best_loss = 9e99
         # self.dimensions = [
         #     to_skopt_real(self.learning_rate, 'learning_rate', 'log-uniform')]
         self.optimizer_defaults = [
@@ -64,8 +67,6 @@ class Optimizer(Object):
                 Real(low=0., high=0.4, prior='uniform', name='dropout_rate'),
                 ]
 
-        print(self.dimensions)
-
     @property
     def optimizer_keys(self):
         return [k for (k, default) in self.optimizer_defaults]
@@ -82,23 +83,49 @@ class Optimizer(Object):
 
     def announce_test(self, params):
         '''Log a parameter test set. '''
-        logger.info('+' * 20)
-        logger.info('evaluating next set of parameters:')
+        logging.info('+' * 20)
+        logging.info('evaluating next set of parameters:')
         base ='   {}: {}\n'
         for kv in params.items():
-            logger.info(base.format(*kv))
+            logging.info(base.format(*kv))
+
+    def update_model(self, model, kwargs):
+        '''Set config and model attributes by kwargs.
+        Rather sloppy...
+        '''
+        new_config = copy.deepcopy(model.config)
+        for key, arg in kwargs.items():
+            for candidate in [new_config, model]:
+                setattr(candidate, key, arg)
+
+        model.config = new_config
+
+    def save_model(self, model):
+        '''copy the `model` to the `best_model` directory.'''
+        shutil.rmtree(self.best_model_dir)
+        shutil.copy(model.outdir, self.best_model_dir)
 
     def evaluate(self, args):
         ''' wrapper to parse gp_minimize args to model.train'''
-        args = dict(zip(self.optimizer_keys, args))
-        self.model.outdir = self.log_dir_name(args)
-        self.announce_test(args)
+        kwargs = dict(zip(self.optimizer_keys, args))
+        self.announce_test(kwargs)
+        self.update_model(self.model, kwargs)
         try:
-            self.model.train(args)
-            return self.model.evaluate(args)['loss']
+            # self.model.train_multi_gpu(kwargs)
+            loss = self.model.train_and_evaluate()[0]['loss']
+            if loss < self.best_loss:
+                print('found a better loss at %s' % loss)
+                print('kwargs: ', kwargs)
+                self.save_model(self.model)
+                self.best_loss = loss
+            else:
+                shutil.rmtree(self.model.outdir)
+            return loss
+
         except tf.errors.ResourceExhaustedError as e:
-            logger.warn(e)
-            logger.warn('Skipping this test')
+            logging.warn(e)
+            logging.warn('Skipping this test, loss = 9e9')
+            return 9e9
 
     def optimize(self, model):
         '''Calling this method to optimize a :py:class:`pinky.model.Model`
