@@ -268,9 +268,6 @@ class DataGeneratorBase(Object):
                 logger.debug('all NAN. skipping...')
                 continue
 
-            # if self.nmax and iexample >= self.nmax:
-            #     raise StopIteration()
-
             label = self.normalize_label(label)
             yield chunk, label
 

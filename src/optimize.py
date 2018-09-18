@@ -1,17 +1,21 @@
 import os
 import shutil
 import tensorflow as tf
-from .util import delete_if_exists
+import matplotlib.pyplot as plt
+import logging
+import copy
+from collections import OrderedDict
+
 from skopt import gp_minimize
 from skopt import dump as dump_result
 from skopt import load as load_result
 from skopt.space import Real, Categorical, Integer
-# from skopt.plots import plot_convergence, plot_objective_2D
 from skopt.plots import plot_convergence, plot_objective
 from skopt.plots import plot_objective, plot_evaluations
-import matplotlib.pyplot as plt
-import logging
 from pyrocko.guts import Object, Int, Float, List, Tuple, String
+
+from .util import delete_if_exists
+
 
 try:
     from skopt.plots import plot_histogram
@@ -25,49 +29,69 @@ def to_skopt_real(x, name, prior):
     return Real(low=x[0], high=x[1], prior=prior, name=name)
 
 
+string_to_type = {'Real': Real, 'Integer': Integer, 'Categorical': Categorical}
+
+
+class Param(Object):
+    name = String.T()
+    low = Float.T()
+    high = Float.T()
+    default = Float.T()
+    _type = None
+
+    def make_parameter(self):
+        return self._type(low=self.low, high=self.high, name=self.name)
+
+
+class PCategorical(Param):
+    prior = String.T(optional=True)
+    _type = Categorical
+    def make_parameter(self):
+        return self._type(low=self.low, high=self.high, name=self.name,
+                prior=self.prior)
+
+
+class PInteger(Param):
+    _type = Integer
+    def make_parameter(self):
+        return self._type(low=self.low, high=self.high, name=self.name)
+
+
+class PReal(Param):
+    prior = String.T(default='uniform')
+    _type = Real
+    def make_parameter(self):
+        return self._type(low=self.low, high=self.high, name=self.name,
+                prior=self.prior)
+
+
 class Optimizer(Object):
 
-    learning_rate = Tuple.T(3, Float.T(), default=(1e-3, 1e-5, 1e-4))  # low, high, default
     n_calls = Int.T(default=50, help='number of test sets')
-    path_out = String.T(default='optimizer-results', help='base path where to store results, plots and logs')
+    path_out = String.T(default='optimizer-results',
+            help='base path where to store results, plots and logs')
+
+    params = List.T(Param.T(), default=[PReal(name='learning_rate', low=1e-6,
+        high=1e-2, default=1e-4)])
 
     def __init__(self, **kwargs):
 
-        '''
-        TODO:
-         - optimize kernel heigth (cross_channel_kernel)
-
-        '''
         super().__init__(**kwargs)
         self.model = None
         self.result = None
         self.best_model_dir = self.extend_path('best-model')
         self.fn_result = self.extend_path('result.optmz')
         self.best_loss = 9e99
-        # self.dimensions = [
-        #     to_skopt_real(self.learning_rate, 'learning_rate', 'log-uniform')]
-        self.optimizer_defaults = [
-            ('learning_rate', 1e-4),
-            ('base_capacity', 16),
-            ('kernel_width', 3),
-            ('kernel_height', 3),
-            # ('kernel_width_factor', 2),
-            ('n_filters_dense', 64),
-            # ('n_layers', 2),
-            ('dropout_rate', 0.1),
-        ]
+        self.param_keys = [p.name for p in self.params]
+        self.params_dict = OrderedDict()
+        for p in self.params:
+            self.params_dict[p.name] = p.make_parameter()
 
-        self.dimensions = [
-                Real(low=1e-6, high=1e-2, prior='log-uniform',
-                    name='learning_rate'),
-                Integer(low=8, high=32, name='base_capacity'),
-                Integer(low=2, high=5, name='kernel_width'),
-                Integer(low=2, high=5, name='kernel_height'),
-                # Real(low=1, high=3, prior='uniform', name='kernel_width_factor'),
-                Integer(low=16, high=128, name='n_filters_dense'),
-                # Integer(low=1, high=3, name='n_layers'),
-                Real(low=0., high=0.4, prior='uniform', name='dropout_rate'),
-                ]
+        self.optimizer_defaults = [(p.name, p.default) for p in self.params]
+
+    @property
+    def dimensions(self):
+        return [v for _, v in self.params_dict.items()]
 
     @property
     def optimizer_keys(self):
@@ -134,9 +158,6 @@ class Optimizer(Object):
         instance. '''
 
         self.model = model
-        if self.model.auto_clear:
-            delete_if_exists(self.path_out)
-
         self.result = gp_minimize(
                 func=self.evaluate,
                 dimensions=self.dimensions,

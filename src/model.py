@@ -201,11 +201,11 @@ class Model(Object):
             view = features[:3]
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
-        print(features)
+
         input = tf.reshape(
                 features, [-1, *self.config.data_generator.tensor_shape,  1])
 
-        # input = tf.layers.batch_normalization(input, training=False)
+        input = tf.layers.batch_normalization(input, training=training)
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
             input = layer.chain(input=input, training=training,
@@ -227,7 +227,6 @@ class Model(Object):
         variable_summaries(errors[1], 'error_abs_y')
         variable_summaries(errors[2], 'error_abs_z')
 
-        errors = tf.Print(errors, [tf.reduce_mean(errors)], 'errors')
         loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=0,
             keepdims=False))
         variable_summaries(loss_carthesian, 'training_loss')
