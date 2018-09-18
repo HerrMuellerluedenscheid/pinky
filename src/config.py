@@ -51,9 +51,14 @@ class PinkyConfig(Object):
     tpad = Float.T(default=0.,
             help='padding between p phase onset and data chunk start')
     deltat_want = Float.T(optional=True)
+    label_scale = num.ones(3, dtype=num.float32)
 
     def setup(self):
         self.data_generator.set_config(self)
+        if self.normalize_labels:
+            self.label_scale = num.median(
+                    num.array(list(
+                        self.data_generator.iter_labels())), axis=0)
 
         self.evaluation_data_generator.set_config(self)
 
@@ -63,20 +68,17 @@ class PinkyConfig(Object):
         self.set_n_samples()
 
         if self.stack_channels:
+
             self.data_generator = ChannelStackGenerator.from_generator(
                     generator=self.data_generator)
             self.evaluation_data_generator = ChannelStackGenerator.from_generator(
                     generator=self.evaluation_data_generator)
+            self.prediction_data_generator = ChannelStackGenerator.from_generator(
+                    generator=self.prediction_data_generator)
 
         self.data_generator.setup()
         self.evaluation_data_generator.setup()
-
-        if self.normalize_labels:
-            self.label_scale = num.std(
-                    num.array(list(
-                        self.evaluation_data_generator.iter_labels())), axis=0)
-        else:
-            self.label_scale = num.ones(3, dtype=num.float32)
+        self.prediction_data_generator.setup()
 
     def set_n_samples(self):
         '''Set number of sampes (n_samples) from first example of data
