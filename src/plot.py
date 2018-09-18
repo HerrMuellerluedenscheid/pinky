@@ -1,6 +1,16 @@
 import matplotlib.pyplot as plt
 import math
 import numpy as num
+import logging
+from scipy import stats
+
+from matplotlib import rc
+#plt.rc('text', usetex=True)
+
+
+logger = logging.getLogger('pinky.plot')
+POINT_SIZE = 2.
+FIG_SUF = '.pdf'
 
 
 def flatten(items):
@@ -24,20 +34,24 @@ def get_left_axs(axs_grid):
     return [ax[0] for ax in axs_grid]
 
 
-def plot_labels(labels, color, title, axs=None):
+def plot_locations(locations, color, title, axs=None):
     fig = None
     if axs is None:
         fig, axs = plt.subplots(1, 2)
 
-    nlabels = len(labels)
-    nlabel_components = len(labels[0])
-    labels_array = num.empty((nlabels, nlabel_components))
-    for i, l in enumerate(labels):
-        labels_array[i, :] = l
+    nlocations = len(locations)
+    nlabel_components = len(locations[0])
+    locations_array = num.empty((nlocations, nlabel_components))
+    for i, l in enumerate(locations):
+        locations_array[i, :] = l
 
-    labels_array = num.transpose(labels_array)
-    axs[0].scatter(labels_array[0], labels_array[2], c=color, s=1., alpha=0.5)
-    axs[1].scatter(labels_array[1], labels_array[2], c=color, s=1., alpha=0.5,
+    locations_array = num.transpose(locations_array)
+
+    axs[0].scatter(
+            locations_array[0], locations_array[2], c=color, s=1., alpha=0.5)
+
+    axs[1].scatter(
+            locations_array[1], locations_array[2], c=color, s=1., alpha=0.5,
             label=title)
 
     for ax in axs:
@@ -65,7 +79,8 @@ def show_data(model, shuffle=False):
 
     model.config.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
-            model.config.data_generator.generate()):
+            model.config.prediction_data_generator.generate()):
+            # model.config.data_generator.generate()):
 
         if i == n:
             break
@@ -133,7 +148,7 @@ def show_kernels_dense(weights, name=None):
     axs.set_xticks([])
 
     if name:
-        fig.savefig(name)
+        fig.savefig(name+FIG_SUF)
     else:
         plt.show()
 
@@ -155,7 +170,7 @@ def show_kernels(weights, name=None):
         ax.set_xticks([])
 
     if name:
-        fig.savefig(name)
+        fig.savefig(name+FIG_SUF)
     else:
         plt.show()
 
@@ -178,3 +193,92 @@ def plotNNFilter(units):
         plt.title('Filter ' + str(i))
         plt.imshow(units[0,:,:,i], interpolation="nearest", cmap="gray")
 
+
+def confidence(data, rate=0.95):
+    return stats.t.interval(
+            rate, len(data)-1, loc=num.mean(data), scale=stats.sem(data))
+
+
+def hist_with_stats(data, ax):
+    '''Plot a histogram of `data` into `ax` and label median and errors.'''
+    nbins = 71
+    ax.hist(data, bins=nbins)
+    med = num.mean(data)
+    ax.axvline(med, color='black')
+    ax.text(0.1, 0.99,
+            r'$\mu = %1.1f\pm$ %1.1f$' % (med, num.std(data)),
+            horizontalalignment='left',
+            transform=ax.transAxes)
+
+
+def mislocation_hist(predictions, labels, name=None):
+    '''Plot statistics on mislocations in 3 dimensions and absolute errors.'''
+    predictions = num.array(predictions)
+    labels = num.array(labels)
+    errors = predictions - labels
+    errors_abs = num.sqrt(num.sum(errors**2, axis=1))
+    
+    fig, axs = plt.subplots(2, 2, sharey=True)
+
+    hist_with_stats(errors.T[0], axs[0][0])
+    axs[0][0].set_title('Error xy')
+    
+    hist_with_stats(errors.T[1], axs[0][1])
+    axs[0][1].set_title('Error xz')
+    
+    hist_with_stats(errors.T[2], axs[1][0])
+    axs[1][0].set_title('Error yz')
+
+    hist_with_stats(errors_abs, axs[1][1])
+    axs[1][1].set_title('Absolute errors [m]')
+
+    for ax in flatten(axs):
+        ax.set_xlabel('mislocation [m]')
+        ax.set_yticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+    if name:
+        fig.savefig(name+FIG_SUF)
+
+
+def error_map(prediction, label, ax):
+    px, py = prediction
+    lx, ly = label
+
+    ax.plot((px, lx), (py, ly), color='grey', alpha=0.5, linewidth=0.1)
+    # ax.arrow(px, lx, px-py, lx-ly, color='grey', alpha=0.5)
+
+    ax.scatter(px, py, color='red', s=POINT_SIZE, linewidth=0)
+    ax.scatter(lx, ly, color='blue', s=POINT_SIZE, linewidth=0)
+
+
+def error_contourf(predictions, labels, ax):
+    '''Make a smoothed contour plot showing absolute errors along the slab.'''
+    errors = num.sqrt(num.sum((predictions-labels)**2, axis=1))
+    med = num.median(errors)
+    vmin = 0.
+    vmax = med + 1.5 * num.std(errors)
+    s = ax.scatter(*predictions.T[1:], s=POINT_SIZE, c=errors, linewidth=0,
+            vmin=vmin, vmax=vmax)
+    plt.gcf().colorbar(s)
+    # ax.contourf(predictions, errors)
+
+
+def plot_predictions_and_labels(predictions, labels, name=None):
+    logger.debug('plot predictions and labels')
+
+    predictions = num.array(predictions)
+    labels = num.array(labels)
+    
+    fig, axs = plt.subplots(2, 2)
+    for (px, py, pz), (lx, ly, lz) in zip(predictions, labels):
+        error_map((py, pz), (ly, lz), axs[0][0])
+        error_map((pz, px), (lz, lx), axs[1][0])
+        error_map((py, pz), (ly, lz), axs[0][1])
+
+    error_contourf(predictions, labels, axs[1][1])
+
+    if name:
+        fig.savefig(name+FIG_SUF)
