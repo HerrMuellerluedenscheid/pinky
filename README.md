@@ -2,8 +2,7 @@ Prereqs
 -------
 
  - tensorflow
- - scikit-optimize
- - git clone git@github.com:HerrMuellerluedenscheid/swarming.git
+ - scikit-optimize (optional for hyperparameter optimization)
 
 Invoke
 ------
@@ -18,12 +17,13 @@ You can dump your examples to TFRecordDatasets to accelerate io operations:
 
 and use the newly created config file to run `--train`
 
+Invoke pinky with `--debug` to enable keep track of weight matrices in
+(tensorboard[https://www.tensorflow.org/guide/summaries_and_tensorboard].
 
 Tests
 -----
 
  - basic learning (synthetics, real data)
-   # TODO: split data -> training, evaluation
  - synthetics, layered cake, train with top and bottom layer containing events.
         Validate with events within middle layer
  - evaluation using 'unknown' velocity model
@@ -36,3 +36,14 @@ Outlook
 
  - increase z error weight -> improve z estimates
 
+
+Notes
+-----
+
+ - `batch_norm` is super important. Without, learning will get stuck at approx.
+   500m x-error, y-error and z-error (in each domain!)
+ - After waveform filtering (2-30Hz) results become worse. Why?
+ - conv2D init set to None (Uses glorot (?)) smaller errors then
+     truncated_normal(std=0.1)
+ - strides 2 vs 1 on CNN: minor improvement in mean error. Max errors get little
+   better. But it's much more expensive.

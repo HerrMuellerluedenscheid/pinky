@@ -20,8 +20,6 @@ except ImportError as e:
     _plot_histogram_error = e
     logging.debug(e)
 
-logger = logging.getLogger()
-
 
 def to_skopt_real(x, name, prior):
     return Real(low=x[0], high=x[1], prior=prior, name=name)
@@ -50,20 +48,24 @@ class Optimizer(Object):
         #     to_skopt_real(self.learning_rate, 'learning_rate', 'log-uniform')]
         self.optimizer_defaults = [
             ('learning_rate', 1e-4),
-            ('base_capacity', 32),
-            ('kernel_width', 2),
-            ('kernel_width_factor', 2),
-            ('n_filters_dense', 512),
+            ('base_capacity', 16),
+            ('kernel_width', 3),
+            ('kernel_height', 3),
+            # ('kernel_width_factor', 2),
+            ('n_filters_dense', 64),
+            # ('n_layers', 2),
             ('dropout_rate', 0.1),
         ]
 
         self.dimensions = [
                 Real(low=1e-6, high=1e-2, prior='log-uniform',
                     name='learning_rate'),
-                Integer(low=12, high=64, name='base_capacity'),
-                Integer(low=1, high=5, name='kernel_width'),
-                Real(low=1, high=3, prior='uniform', name='kernel_width_factor'),
-                Integer(low=64, high=1024, name='n_filters_dense'),
+                Integer(low=8, high=32, name='base_capacity'),
+                Integer(low=2, high=5, name='kernel_width'),
+                Integer(low=2, high=5, name='kernel_height'),
+                # Real(low=1, high=3, prior='uniform', name='kernel_width_factor'),
+                Integer(low=16, high=128, name='n_filters_dense'),
+                # Integer(low=1, high=3, name='n_layers'),
                 Real(low=0., high=0.4, prior='uniform', name='dropout_rate'),
                 ]
 
@@ -150,7 +152,7 @@ class Optimizer(Object):
         ''' Load and set minimizer result.'''
         if self.result is None:
             if self.fn_result is None:
-                logger.warn(
+                logging.warn(
                     'Cannot load results from filename: %s' % self.fn_result)
             self.result = load_result(self.fn_result)
 
@@ -163,11 +165,11 @@ class Optimizer(Object):
 
         # best = self.result.space.point_to_dict(self.result.x)
         best = self.result.x
-        logger.info('Best parameter set:')
-        logger.info(best)
+        logging.info('Best parameter set:')
+        logging.info(best)
 
-        logger.info('Best parameter loss:')
-        logger.info(self.result.fun)
+        logging.info('Best parameter loss:')
+        logging.info(self.result.fun)
 
     def ensure_directory(self, directory):
         if not os.path.exists(directory):
@@ -179,7 +181,7 @@ class Optimizer(Object):
         self.ensure_directory(self.extend_path('plots'))
 
         if _plot_histogram_error:
-            logger.warn(_plot_histogram_error)
+            logging.warn(_plot_histogram_error)
         else:
             for dim_name in self.optimizer_keys:
                 fig, ax = plot_histogram(result=self.result) #, dimension_name=dim_name)
@@ -210,7 +212,7 @@ class Optimizer(Object):
         placeholders = placeholders.format(*identifiers)
 
         log_dir = self.extend_path('tf_logs/' + placeholders)
-        logger.info('Created new logging directory: %s' % log_dir)
+        logging.info('Created new logging directory: %s' % log_dir)
         return log_dir
 
     @classmethod
