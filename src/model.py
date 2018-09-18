@@ -100,7 +100,7 @@ class CNNLayer(Layer):
         return tf.layers.batch_normalization(input, training=training)
 
     def visualize_kernel(self, estimator, index=0, save_path=None, **kwargs):
-        save_name = pjoin(save_path, 'kernel-%s.pdf' % self.name)
+        save_name = pjoin(save_path, 'kernel-%s' % self.name)
         weights = estimator.get_variable_value('%s/kernel' % self.name)
         plot.show_kernels(weights[:, :, index, ...], name=save_name)
 
@@ -113,7 +113,7 @@ class DenseLayer(Layer):
                 activation=self.get_activation())
 
     def visualize_kernel(self, estimator, index=0, save_path=None):
-        save_name = pjoin(save_path, 'kernel-%s.pdf' % self.name)
+        save_name = pjoin(save_path, 'kernel-%s' % self.name)
         weights = estimator.get_variable_value('%s/kernel' % self.name)
         plot.show_kernels_dense(weights, name=save_name)
 
@@ -163,6 +163,12 @@ class Model(Object):
         '''Return the directory where to store the model.'''
         return self.extend_path(self.outdir)
 
+    def get_plot_path(self):
+        '''Return the directory where to store figures.'''
+        d = os.path.join(self.get_summary_outdir(), 'plots')
+        ensure_dir(d)
+        return d
+
     def clear(self):
         '''Delete summary and model directories.'''
         delete_if_exists(self.get_summary_outdir())
@@ -175,8 +181,10 @@ class Model(Object):
 
     def generate_predict_dataset(self):
         '''Generator of prediction dataset.'''
-        return self.config.prediction_data_generator.get_dataset().batch(
-                self.batch_size)
+        d = self.config.prediction_data_generator
+        if not d:
+            raise Exception('\nNo prediction data generator defined in config!')
+        return d.get_dataset()
 
     def generate_dataset(self):
         '''Generator of training dataset.'''
@@ -193,45 +201,45 @@ class Model(Object):
             view = features[:3]
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
-
+        print(features)
         input = tf.reshape(
                 features, [-1, *self.config.data_generator.tensor_shape,  1])
 
-        input = tf.layers.batch_normalization(input, training=training)
+        # input = tf.layers.batch_normalization(input, training=False)
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
             input = layer.chain(input=input, training=training,
                     dropout_rate=self.dropout_rate)
 
         # Final layer
-        predictions = tf.layers.dense(input, self.config.n_classes, name='output')
-        predictions = tf.transpose(predictions) 
+        predictions = tf.layers.dense(input, self.config.n_classes,
+                name='output', activation=None)
 
         if mode == tf.estimator.ModeKeys.PREDICT:
             return tf.estimator.EstimatorSpec(mode,
-                    predictions = {'xyz': predictions})
+                    predictions = {'predictions': predictions})
 
+        predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
-        errors = tf.abs(predictions - labels)
+        errors = predictions - labels
+        abs_errors = tf.abs(errors)
         variable_summaries(errors[0], 'error_abs_x')
         variable_summaries(errors[1], 'error_abs_y')
         variable_summaries(errors[2], 'error_abs_z')
 
+        errors = tf.Print(errors, [tf.reduce_mean(errors)], 'errors')
         loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=0,
             keepdims=False))
         variable_summaries(loss_carthesian, 'training_loss')
         loss_ = tf.reduce_mean(loss_carthesian)
-
         loss = tf.losses.mean_squared_error(labels, predictions)
         tf.summary.scalar('mean_loss_cart', loss_)
-        # tf.summary.scalar('loss_cart', loss)
-        # loss_ = loss.eval(session=self.sess)
-        # num.savetxt(loss_, 'xxx')
         tf.summary.scalar('loss', loss)
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            # move UPDATE_OPS to outer function
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            with tf.control_dependencies(update_ops):
+            with tf.control_dependencies([update_ops]):
                 train_op = optimizer.minimize(
                     loss=loss, global_step=tf.train.get_global_step())
 
@@ -301,10 +309,18 @@ class Model(Object):
         logger.debug('predicting...')
         with self.sess as default:
             self.est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.get_outdir())
+                model_fn=self.model, model_dir=self.get_outdir(), params={})
+            labels = [l for _, l in self.config.prediction_data_generator.generate()]
+            predictions = []
+            for p, l in zip(self.est.predict(input_fn=self.generate_predict_dataset,
+                    yield_single_examples=True), labels):
+                predictions.append(p['predictions'])
 
-            for p in self.est.predict(input_fn=self.generate_predict_dataset):
-                print(p)
+            save_name = pjoin(self.get_plot_path(), 'mislocation')
+            plot.plot_predictions_and_labels(predictions, labels, name=save_name)
+
+            save_name = pjoin(self.get_plot_path(), 'mislocation_hists')
+            plot.mislocation_hist(predictions, labels, name=save_name)
 
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...'''
@@ -334,14 +350,14 @@ class Model(Object):
 
     def save_kernels(self, index=0):
         '''save weight kernels of all layers (at index=`index`).'''
-        save_path = os.path.join(self.get_summary_outdir(), 'kernels')
+        save_path = pjoin(self.get_summary_outdir(), 'kernels')
         ensure_dir(save_path)
         logger.info('Storing weight matrices at %s' % save_path)
         for layer in self.layers:
             layer.visualize_kernel(self.est, save_path=save_path)
 
     def save_activation_maps(self, index=0):
-        save_path = os.path.join(self.get_summary_outdir(), 'kernels')
+        save_path = pjoin(self.get_summary_outdir(), 'kernels')
         ensure_dir(save_path)
         for layer in self.layers:
             plot.getActivations(layer, stimuli)
