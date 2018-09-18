@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+def all_NAN(d):
+    return num.all(num.isnan(d))
+
+
 class ChunkOperation(Object):
     '''Modifies a data chunk (2D image) when called.'''
     def __call__(self, chunk):
@@ -253,25 +257,29 @@ class DataGeneratorBase(Object):
         '''Subclass this method!
         
         Yields: feature, label
+        
+        Chunks that are all NAN will be skipped.
         '''
         record_iterator = tf.python_io.tf_record_iterator(
             path=self.fn_tfrecord)
 
-        return self.unpack_examples(record_iterator)
+        for iexample, (chunk, label) in enumerate(self.unpack_examples(record_iterator)):
+            if all_NAN(chunk):
+                logger.debug('all NAN. skipping...')
+                continue
+
+            # if self.nmax and iexample >= self.nmax:
+            #     raise StopIteration()
+
+            label = self.normalize_label(label)
+            yield chunk, label
 
     def generate(self):
         '''Takes the output of `iter_examples_and_labels` and applies post
         processing (see: `process_chunk`).
-        
-        Chunks that are all NAN will be skipped.
         '''
-        for example, label in self.iter_examples_and_labels():
-
-            if num.all(num.isnan(example)):
-                logger.debug('all NAN. skipping...')
-                continue
-
-            yield self.process_chunk(example), label
+        for chunk, label in self.iter_examples_and_labels():
+            yield self.process_chunk(chunk), label
 
     def extract_labels(self):
         '''Overwrite this method!'''
@@ -336,11 +344,8 @@ class DataGeneratorBase(Object):
             chunk[gaps] = self.config.imputation(chunk)
             self.mask(chunk)
 
-        # LEVEL
-        #  print('test leveling') ---------------------------
         if num.any(num.isnan(chunk)):
             logger.warn('NANs left in chunk')
-            print(num.all(num.isnan(chunk)))
 
         chunk -= num.min(chunk)
         chunk /= num.max(chunk)
@@ -398,6 +403,10 @@ class ChannelStackGenerator(DataGeneratorBase):
             chunk = self.get_raw_data_chunk(shape=self.tensor_shape)
             for nsl, indices in self.nsl_to_indices_orig.items():
                 chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
+
+            if all_NAN(chunk):
+                logger.debug('all NAN. skipping...')
+                continue
 
             yield chunk, label
 
@@ -582,8 +591,12 @@ class PileData(DataGenerator):
                 chunk = self.get_raw_data_chunk(self.tensor_shape)
                 self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=m.tmin)
 
+                if all_NAN(chunk):
+                    logger.debug('all NAN. skipping...')
+                    continue
+
                 label = self.extract_labels(m)
-                # label = self.normalizate_label(label)
+                label = self.normalize_label(label)
 
                 yield chunk, label
 
