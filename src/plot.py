@@ -13,6 +13,16 @@ POINT_SIZE = 2.
 FIG_SUF = '.pdf'
 
 
+def save_figure(fig, name=None):
+    '''Saves figure `fig` if `name` is defined. Closes the figure after
+    saving.'''
+    if not name:
+        return
+
+    fig.savefig(name+FIG_SUF)
+    plt.close()
+
+
 def flatten(items):
     return [ax for _ax in items for ax in _ax]
 
@@ -79,8 +89,8 @@ def show_data(model, shuffle=False):
 
     model.config.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
-            model.config.prediction_data_generator.generate()):
-            # model.config.data_generator.generate()):
+            # model.config.prediction_data_generator.generate()):
+            model.config.data_generator.generate()):
 
         if i == n:
             break
@@ -125,17 +135,15 @@ def show_data(model, shuffle=False):
     adjust(fig)
     adjust(fig_w)
 
-    fig_labels, axs_labels = plot_labels(
+    fig_labels, axs_labels = plot_locations(
             labels_eval, 'red', title='eval')
 
-    fig_labels, axs_labels = plot_labels(
+    fig_labels, axs_labels = plot_locations(
             labels_train, 'blue', title='train', axs=axs_labels)
 
-    fig_labels.savefig('pinky_labels.pdf', dpi=400)
-    fig.savefig('pinky_image.pdf', dpi=400)
-    fig_w.savefig('pinky_waves.pdf', dpi=400)
-
-    plt.show()
+    save_figure(fig_labels, 'pinky_labels')
+    save_figure(fig, 'pinky_image')
+    save_figure(fig_w, 'pinky_waves.pdf')
 
 
 def show_kernels_dense(weights, name=None):
@@ -147,10 +155,7 @@ def show_kernels_dense(weights, name=None):
     axs.set_yticks([])
     axs.set_xticks([])
 
-    if name:
-        fig.savefig(name+FIG_SUF)
-    else:
-        plt.show()
+    save_figure(fig, name)
 
 
 def show_kernels(weights, name=None):
@@ -169,10 +174,7 @@ def show_kernels(weights, name=None):
         ax.set_yticks([])
         ax.set_xticks([])
 
-    if name:
-        fig.savefig(name+FIG_SUF)
-    else:
-        plt.show()
+    save_figure(fig, name)
 
 
 def getActivations(sess, layer, stimuli):
@@ -239,8 +241,7 @@ def mislocation_hist(predictions, labels, name=None):
         ax.spines['left'].set_visible(False)
         ax.spines['right'].set_visible(False)
 
-    if name:
-        fig.savefig(name+FIG_SUF)
+    save_figure(fig, name)
 
 
 def error_map(prediction, label, ax):
@@ -279,6 +280,4 @@ def plot_predictions_and_labels(predictions, labels, name=None):
         error_map((py, pz), (ly, lz), axs[0][1])
 
     error_contourf(predictions, labels, axs[1][1])
-
-    if name:
-        fig.savefig(name+FIG_SUF)
+    save_figure(fig, name)
