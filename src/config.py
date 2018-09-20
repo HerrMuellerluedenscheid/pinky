@@ -52,14 +52,17 @@ class PinkyConfig(Object):
             help='padding between p phase onset and data chunk start')
     deltat_want = Float.T(optional=True)
     label_scale = num.ones(3, dtype=num.float32)
+    label_median = num.ones(3, dtype=num.float32)
 
     def setup(self):
         self.data_generator.set_config(self)
         if self.normalize_labels:
-            self.label_scale = num.median(
+            self.label_median = num.median(
                     num.array(list(
                         self.data_generator.iter_labels())), axis=0)
-
+            self.label_scale = num.std(
+                    num.array(list(
+                        self.data_generator.iter_labels())), axis=0)
         self.evaluation_data_generator.set_config(self)
 
         if self.prediction_data_generator:
@@ -73,12 +76,14 @@ class PinkyConfig(Object):
                     generator=self.data_generator)
             self.evaluation_data_generator = ChannelStackGenerator.from_generator(
                     generator=self.evaluation_data_generator)
-            self.prediction_data_generator = ChannelStackGenerator.from_generator(
+            if self.prediction_data_generator:
+                self.prediction_data_generator = ChannelStackGenerator.from_generator(
                     generator=self.prediction_data_generator)
 
         self.data_generator.setup()
         self.evaluation_data_generator.setup()
-        self.prediction_data_generator.setup()
+        if self.prediction_data_generator:
+            self.prediction_data_generator.setup()
 
     def set_n_samples(self):
         '''Set number of sampes (n_samples) from first example of data
@@ -87,6 +92,12 @@ class PinkyConfig(Object):
         example, _ = next(self.data_generator.generate())
         self._n_samples = example.shape[1]
         assert(example.shape == self.tensor_shape)
+
+    def normalize_label(self, label):
+        return (label - self.label_median) / self.label_scale
+
+    def denormalize_label(self, label):
+        return (label * self.label_scale) + self.label_median
 
     @property
     def channels(self):
