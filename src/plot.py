@@ -11,6 +11,7 @@ from matplotlib import rc
 logger = logging.getLogger('pinky.plot')
 POINT_SIZE = 2.
 FIG_SUF = '.pdf'
+NPOINTS = 110
 
 
 def save_figure(fig, name=None):
@@ -208,7 +209,8 @@ def hist_with_stats(data, ax):
     med = num.mean(data)
     ax.axvline(med, color='black')
     ax.text(0.1, 0.99,
-            r'$\mu = %1.1f\pm$ %1.1f$' % (med, num.std(data)),
+            r'$\mu = %1.1f\pm %1.1f$' % (med, num.std(data)),
+            fontsize=9,
             horizontalalignment='left',
             transform=ax.transAxes)
 
@@ -223,24 +225,27 @@ def mislocation_hist(predictions, labels, name=None):
     fig, axs = plt.subplots(2, 2, sharey=True, sharex=True)
 
     hist_with_stats(errors.T[0], axs[0][0])
-    axs[0][0].set_title('Error y')
+    axs[0][0].set_xlabel('Error (North) [m]')
     
     hist_with_stats(errors.T[1], axs[0][1])
-    axs[0][1].set_title('Error y')
+    axs[0][1].set_xlabel('Error (East) [m]')
     
     hist_with_stats(errors.T[2], axs[1][0])
-    axs[1][0].set_title('Error z')
+    axs[1][0].set_xlabel('Error (Depth) [m]')
 
     # hist_with_stats(errors_abs, axs[1][1])
     # axs[1][1].set_title('Absolute errors [m]')
-
-    for ax in flatten(axs):
-        ax.set_xlabel('mislocation [m]')
+    xticks = range(-1000, 1200, 200)
+    xtick_labels = ((-1000, 0, 1000))
+    for ax in flatten(axs[:3]):
         ax.set_yticks([])
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(xtick_labels)
         ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.spines['right'].set_visible(False)
 
+    fig.tight_layout()
     save_figure(fig, name)
 
 
@@ -261,13 +266,19 @@ def error_contourf(predictions, labels, ax):
     med = num.median(errors)
     vmin = 0.
     vmax = med + 1.5 * num.std(errors)
-    s = ax.scatter(*predictions.T[1:], s=POINT_SIZE, c=errors, linewidth=0,
+    s = ax.scatter(predictions.T[0], -predictions.T[2], s=6, c=errors, linewidth=0,
             vmin=vmin, vmax=vmax)
+    ax.set_xlabel('N-S')
+    ax.set_ylabel('Z')
     plt.gcf().colorbar(s)
     # ax.contourf(predictions, errors)
 
 
 def plot_predictions_and_labels(predictions, labels, name=None):
+    if NPOINTS:
+        predictions = predictions[: NPOINTS]
+        labels = labels[: NPOINTS]
+        logger.warn('limiting number of points in scatter plot to %s' % NPOINTS)
     logger.debug('plot predictions and labels')
 
     predictions = num.array(predictions)
@@ -275,9 +286,23 @@ def plot_predictions_and_labels(predictions, labels, name=None):
     
     fig, axs = plt.subplots(2, 2)
     for (px, py, pz), (lx, ly, lz) in zip(predictions, labels):
-        error_map((py, pz), (ly, lz), axs[0][0])
-        error_map((pz, px), (lz, lx), axs[1][0])
-        # error_map((py, pz), (ly, lz), axs[0][1])
+        # top left
+        error_map((px, py), (lx, ly), axs[0][0])
+        axs[0][0].set_xlabel('N-S')
+        axs[0][0].set_ylabel('E-W')
+
+        # bottom left 
+        error_map((px, -pz), (lx, -lz), axs[1][0])
+        axs[1][0].set_xlabel('N-S')
+        axs[1][0].set_ylabel('Z')
+
+        # top right
+        error_map((-pz, py), (-lz, ly), axs[0][1])
+        axs[0][1].set_xlabel('Z')
+        axs[0][1].set_ylabel('E-W')
 
     error_contourf(predictions, labels, axs[1][1])
     save_figure(fig, name)
+
+
+

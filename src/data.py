@@ -611,8 +611,7 @@ class SeismosizerData(DataGenerator):
         filter_oob(self.sources, self.targets, self.store.config)
 
         dt = self.config.deltat_want or self.store.config.deltat
-        self.n_samples = int((self.sample_length + self.config.tpad) / dt)
-        self.tensor_shape = (len(self.targets), self.n_samples)
+        self.n_samples = int((self.config.sample_length + self.config.tpad) / dt)
 
     def extract_labels(self, source):
         return (source.north_shift, source.east_shift, source.depth)
