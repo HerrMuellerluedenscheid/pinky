@@ -220,19 +220,19 @@ def mislocation_hist(predictions, labels, name=None):
     errors = predictions - labels
     errors_abs = num.sqrt(num.sum(errors**2, axis=1))
     
-    fig, axs = plt.subplots(2, 2, sharey=True)
+    fig, axs = plt.subplots(2, 2, sharey=True, sharex=True)
 
     hist_with_stats(errors.T[0], axs[0][0])
-    axs[0][0].set_title('Error xy')
+    axs[0][0].set_title('Error y')
     
     hist_with_stats(errors.T[1], axs[0][1])
-    axs[0][1].set_title('Error xz')
+    axs[0][1].set_title('Error y')
     
     hist_with_stats(errors.T[2], axs[1][0])
-    axs[1][0].set_title('Error yz')
+    axs[1][0].set_title('Error z')
 
-    hist_with_stats(errors_abs, axs[1][1])
-    axs[1][1].set_title('Absolute errors [m]')
+    # hist_with_stats(errors_abs, axs[1][1])
+    # axs[1][1].set_title('Absolute errors [m]')
 
     for ax in flatten(axs):
         ax.set_xlabel('mislocation [m]')
@@ -277,7 +277,7 @@ def plot_predictions_and_labels(predictions, labels, name=None):
     for (px, py, pz), (lx, ly, lz) in zip(predictions, labels):
         error_map((py, pz), (ly, lz), axs[0][0])
         error_map((pz, px), (lz, lx), axs[1][0])
-        error_map((py, pz), (ly, lz), axs[0][1])
+        # error_map((py, pz), (ly, lz), axs[0][1])
 
     error_contourf(predictions, labels, axs[1][1])
     save_figure(fig, name)

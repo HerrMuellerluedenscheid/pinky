@@ -60,9 +60,10 @@ class PinkyConfig(Object):
             self.label_median = num.median(
                     num.array(list(
                         self.data_generator.iter_labels())), axis=0)
-            self.label_scale = num.std(
+            # CHANGE: use global normalization scale (mean)
+            self.label_scale = num.mean(num.std(
                     num.array(list(
-                        self.data_generator.iter_labels())), axis=0)
+                        self.data_generator.iter_labels())), axis=0))
         self.evaluation_data_generator.set_config(self)
 
         if self.prediction_data_generator:
@@ -94,9 +95,11 @@ class PinkyConfig(Object):
         assert(example.shape == self.tensor_shape)
 
     def normalize_label(self, label):
+        '''label has to be a numpy array'''
         return (label - self.label_median) / self.label_scale
 
     def denormalize_label(self, label):
+        '''label has to be a numpy array'''
         return (label * self.label_scale) + self.label_median
 
     @property

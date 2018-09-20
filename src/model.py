@@ -127,12 +127,14 @@ class Model(Object):
         ''' '''
         super().__init__(**kwargs)
 
-        self.devices = ['/device:GPU:0', '/device:GPU:1']
-        self.tf_config = tf_config
-        self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
+        self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.est = None
         self.prefix = None
+
+    def set_tfconfig(self, tf_config):
+        self.sess.close()
+        self.sess = tf.Session(config=tf_config)
 
     def enable_debugger(self):
         '''wrap session to enable breaking into debugger.'''
@@ -316,21 +318,31 @@ class Model(Object):
         return result
 
     def predict(self):
-        logger.debug('predicting...')
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir(), params={})
-            labels = [l for _, l in self.config.prediction_data_generator.generate()]
             predictions = []
             for p in self.est.predict(
                     input_fn=self.generate_predict_dataset,
+                    yield_single_examples=True):
+                print(p)
+
+    def evaluate(self):
+        logger.debug('evaluation...')
+        with self.sess as default:
+            self.est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.get_outdir(), params={})
+            labels = [l for _, l in self.config.evaluation_data_generator.generate()]
+            predictions = []
+            for p in self.est.predict(
+                    input_fn=self.generate_eval_dataset,
                     yield_single_examples=True):
 
                 predictions.append(p['predictions'])
 
             save_name = pjoin(self.get_plot_path(), 'mislocation')
-            predictions = self.denormalize_label(predictions)
-            labels = self.denormalize_label(labels)
+            predictions = self.denormalize_label(num.array(predictions))
+            labels = self.denormalize_label(num.array(labels))
 
             plot.plot_predictions_and_labels(
                     predictions, labels, name=save_name)
@@ -387,6 +399,8 @@ def main():
                 description='')
     parser.add_argument('--config')
     parser.add_argument('--train', action='store_true')
+    parser.add_argument('--evaluate', action='store_true',
+            help='Predict from input of `evaluation_data_generator` in config.')
     parser.add_argument('--predict', action='store_true',
             help='Predict from input of `predict_data_generator` in config.')
     parser.add_argument('--optimize', metavar='FILENAME',
@@ -399,8 +413,6 @@ def main():
     parser.add_argument('--clear', help='delete remaints of former runs',
             action='store_true')
     parser.add_argument('--show-data', action='store_true')
-    parser.add_argument(
-        '--cpu', action='store_true', help='force CPU usage')
     parser.add_argument('--ngpu', help='number of GPUs to use')
     parser.add_argument('--gpu-no', help='GPU number to use', type=int)
     parser.add_argument('--debug', help='enable logging level DEBUG', action='store_true')
@@ -409,8 +421,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.predict and args.clear:
-        sys.exit('\nCannot `--clear` when running `--predict`')
+    if (args.predict or args.evaluate) and args.clear:
+        sys.exit('\nCannot `--clear` when running `--predict` or `--evaluate`')
 
     if args.debug:
         logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -430,12 +442,11 @@ def main():
     if args.clear:
         model.clear()
 
-    tf_config = None
-    if args.cpu:
-        tf_config = tf.ConfigProto(device_count={'GPU': 0})
-    
-    elif args.gpu_no:
-        tf_config = tf.ConfigProto(device_count={'GPU': args.gpu_no})
+    tf_config = tf.ConfigProto()
+    tf_config.gpu_options.allow_growth = True
+    if args.gpu_no:
+        tf_config.device_count = {'GPU': args.gpu_no}
+    model.set_tfconfig(tf_config)
 
     if args.show_data:
         from . import plot
@@ -503,7 +514,9 @@ def main():
         else:
             model.train_and_evaluate()
             # model.train()
-    
+    elif args.evaluate:
+        model.evaluate()
+
     elif args.predict:
         # ATM this command should be named `evaluate`
         model.predict()
