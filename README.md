@@ -47,3 +47,6 @@ Notes
      truncated_normal(std=0.1)
  - strides 2 vs 1 on CNN: minor improvement in mean error. Max errors get little
    better. But it's much more expensive.
+ - label normalization improves learning
+ - large batch sizes (>64) perform worse than smaller  (<32) see:
+   https://stats.stackexchange.com/questions/164876/tradeoff-batch-size-vs-number-of-iterations-to-train-a-neural-network

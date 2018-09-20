@@ -21,24 +21,6 @@ import os
 logger = logging.getLogger('pinky.model')
 
 
-class DumpHook(tf.train.SessionRunHook):
-    def __init__(self, labels, predictions):
-        self.saver = tf.train.Saver(labels, predictions)
-        self.session = session
-
-    def begin(self):
-        pass
-
-  # def before_run(self, run_context):
-  #   return tf.train.SessionRunArgs(self.loss)  
-
-    def after_run(self, run_context, run_values):
-        # loss_value = run_values.results
-        print(self.labels)
-        print(self.predictions)
-        self.saver.save(self.session, 'test-model')
-
-
 class Layer(Object):
     '''A 2D CNN followed by dropout and batch normalization'''
     
@@ -125,7 +107,6 @@ class Model(Object):
             directory')
 
     config = PinkyConfig.T()
-    hyperparameter_optimizer = Optimizer.T(optional=True)
     learning_rate = Float.T(default=1e-3)
     dropout_rate = Float.T(default=0.01)
     batch_size = Int.T(default=10)
@@ -143,6 +124,7 @@ class Model(Object):
     layers = List.T(Layer.T(), help='A list of `Layers` instances.')
 
     def __init__(self, tf_config=None, **kwargs):
+        ''' '''
         super().__init__(**kwargs)
 
         self.devices = ['/device:GPU:0', '/device:GPU:1']
@@ -150,9 +132,23 @@ class Model(Object):
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.sess = tf.Session(config=tf_config)
         self.est = None
+        self.prefix = None
+
+    def enable_debugger(self):
+        '''wrap session to enable breaking into debugger.'''
+        from tensorflow.python import debug as tf_debug
+
+        # Attach debugger
+        self.sess = tf_debug.LocalCLIDebugWrapperSession(self.sess)
+
+        # Attach Tensorboard debugger
+        # self.sess = tf_debug.TensorBoardDebugWrapperSession(
+        #         self.sess, "localhost:8080")
 
     def extend_path(self, p):
         '''Append subdirectory to path `p` named by the model.'''
+        if self.prefix:
+            return os.path.join(self.prefix, p, self.name)
         return os.path.join(p, self.name)
 
     def get_summary_outdir(self):
@@ -172,6 +168,13 @@ class Model(Object):
     def clear(self):
         '''Delete summary and model directories.'''
         delete_if_exists(self.get_summary_outdir())
+        self.clear_model()
+
+    def denormalize_label(self, items):
+        return self.config.denormalize_label(items)
+
+    def clear_model(self):
+        '''model directories.'''
         delete_if_exists(self.get_outdir())
 
     def generate_eval_dataset(self):
@@ -202,7 +205,8 @@ class Model(Object):
             view = tf.expand_dims(view, -1)
             tf.summary.image('input', view)
 
-        input = tf.reshape(
+        with tf.name_scope('input'):
+            input = tf.reshape(
                 features, [-1, *self.config.data_generator.tensor_shape,  1])
 
         input = tf.layers.batch_normalization(input, training=training)
@@ -217,7 +221,18 @@ class Model(Object):
 
         if mode == tf.estimator.ModeKeys.PREDICT:
             return tf.estimator.EstimatorSpec(mode,
-                    predictions = {'predictions': predictions})
+                    predictions = {'predictions':predictions})
+
+        # do not denormalize loss
+        loss = tf.losses.mean_squared_error(
+            labels, predictions
+        )
+
+        # transform to carthesian coordiantes
+        labels = self.denormalize_label(labels)
+        predictions = self.denormalize_label(predictions)
+        labels = tf.Print(labels, [labels[:10]], 'labels')
+        predictions = tf.Print(predictions, [predictions[:10]], 'predictions')
 
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
@@ -229,32 +244,30 @@ class Model(Object):
 
         loss_carthesian = tf.sqrt(tf.reduce_sum(errors ** 2, axis=0,
             keepdims=False))
+
         variable_summaries(loss_carthesian, 'training_loss')
         loss_ = tf.reduce_mean(loss_carthesian)
-        loss = tf.losses.mean_squared_error(labels, predictions)
         tf.summary.scalar('mean_loss_cart', loss_)
-        tf.summary.scalar('loss', loss)
+        tf.summary.scalar('loss_normalized', loss)
+
         if mode == tf.estimator.ModeKeys.TRAIN:
             optimizer = tf.train.AdamOptimizer(self.learning_rate)
-            # move UPDATE_OPS to outer function
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            with tf.control_dependencies([update_ops]):
+            with tf.control_dependencies(update_ops):
                 train_op = optimizer.minimize(
                     loss=loss, global_step=tf.train.get_global_step())
 
             logging_hook = tf.train.LoggingTensorHook(
                     {"loss": loss, "step": tf.train.get_global_step()},
                     every_n_iter=10)
+
             return tf.estimator.EstimatorSpec(
                     mode=mode,
                     loss=loss,
                     train_op=train_op,
-                    # TODO: make this work for multi GPU:
-                    evaluation_hooks=[
-                            self.get_summary_hook('eval'),],
+                    evaluation_hooks=[self.get_summary_hook('eval'),],
                     training_hooks=[
-                            self.get_summary_hook('train'),
-                            logging_hook,])
+                            self.get_summary_hook('train'), logging_hook])
 
         elif mode == tf.estimator.ModeKeys.EVAL:
             metrics = {
@@ -268,14 +281,11 @@ class Model(Object):
             with tf.name_scope('eval'):
                 for k, v in metrics.items():
                     tf.summary.scalar(k, v[1])
-            # vloss = tf.Variable(loss)
-            # restore_vars = [vloss]
             return tf.estimator.EstimatorSpec(
                     mode=mode, loss=loss, eval_metric_ops=metrics,
                     evaluation_hooks=[self.get_summary_hook('eval'),
                         # dump_hook
                         ])
-            # saver.save(self.sess, '/tmp/testtt')
 
     def get_summary_hook(self, subdir=''):
         return tf.train.SummarySaverHook(
@@ -299,6 +309,7 @@ class Model(Object):
 
             result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
 
+        self.save_model_in_summary()
         self.save_kernels()
         # self.save_activation_maps()
 
@@ -311,12 +322,18 @@ class Model(Object):
                 model_fn=self.model, model_dir=self.get_outdir(), params={})
             labels = [l for _, l in self.config.prediction_data_generator.generate()]
             predictions = []
-            for p, l in zip(self.est.predict(input_fn=self.generate_predict_dataset,
-                    yield_single_examples=True), labels):
+            for p in self.est.predict(
+                    input_fn=self.generate_predict_dataset,
+                    yield_single_examples=True):
+
                 predictions.append(p['predictions'])
 
             save_name = pjoin(self.get_plot_path(), 'mislocation')
-            plot.plot_predictions_and_labels(predictions, labels, name=save_name)
+            predictions = self.denormalize_label(predictions)
+            labels = self.denormalize_label(labels)
+
+            plot.plot_predictions_and_labels(
+                    predictions, labels, name=save_name)
 
             save_name = pjoin(self.get_plot_path(), 'mislocation_hists')
             plot.mislocation_hist(predictions, labels, name=save_name)
@@ -335,17 +352,14 @@ class Model(Object):
             distribution = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
             run_config = tf.estimator.RunConfig(train_distribute=distribution)
             est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.outdir, params=params,
-                config=run_config
-            )
+                model_fn=self.model,
+                model_dir=self.outdir,
+                params=params,
+                config=run_config)
+
             est.train(input_fn=self.generate_dataset)
             logger.info('====== start evaluation')
             return est.evaluate(input_fn=self.generate_eval_dataset)
-
-    def optimize(self):
-        if self.hyperparameter_optimizer is None:
-            sys.exit('No hyperparameter optimizer defined in config file')
-        self.hyperparameter_optimizer.optimize(self)
 
     def save_kernels(self, index=0):
         '''save weight kernels of all layers (at index=`index`).'''
@@ -360,16 +374,10 @@ class Model(Object):
         ensure_dir(save_path)
         for layer in self.layers:
             plot.getActivations(layer, stimuli)
-
-    def restore(self):
-        # tf.reset_default_graph()
-        saver = tf.train.Saver()
-        self.train_and_evaluate()
-        with self.sess as sess:
-            # return tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
-            ckpt = tf.train.get_checkpoint_state(self.get_outdir())
-            x = saver.restore(sess, ckpt.model_checkpoint_path)
-            print(x)
+        
+    def save_model_in_summary(self):
+        self.regularize()
+        self.dump(filename=pjoin(self.get_summary_outdir(), 'model.config'))
 
 
 def main():
@@ -381,7 +389,8 @@ def main():
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--predict', action='store_true',
             help='Predict from input of `predict_data_generator` in config.')
-    parser.add_argument('--optimize', action='store_true')
+    parser.add_argument('--optimize', metavar='FILENAME',
+            help='use optimizer defined in FILENAME') 
     parser.add_argument('--write-tfrecord', metavar='FILENAME',
         help='write data_generator out to FILENAME')
     parser.add_argument('--from-tfrecord', metavar='FILENAME',
@@ -393,9 +402,9 @@ def main():
     parser.add_argument(
         '--cpu', action='store_true', help='force CPU usage')
     parser.add_argument('--ngpu', help='number of GPUs to use')
-    parser.add_argument(
-        '--debug', action='store_true')
-    parser.add_argument('--restore', action='store_true')
+    parser.add_argument('--gpu-no', help='GPU number to use', type=int)
+    parser.add_argument('--debug', help='enable logging level DEBUG', action='store_true')
+    parser.add_argument('--tfdebug', help='break into tensorflow debugger', action='store_true')
     parser.add_argument('--force', action='store_true')
 
     args = parser.parse_args()
@@ -409,20 +418,24 @@ def main():
         logging.debug('Debug level active')
     else:
         logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)
 
     if args.config:
         model = guts.load(filename=args.config)
         model.config.setup()
+
+    if args.tfdebug:
+        model.enable_debugger()
 
     if args.clear:
         model.clear()
 
     tf_config = None
     if args.cpu:
-        tf_config = tf.ConfigProto(
-            device_count={'GPU': 0}
-        )
+        tf_config = tf.ConfigProto(device_count={'GPU': 0})
+    
+    elif args.gpu_no:
+        tf_config = tf.ConfigProto(device_count={'GPU': args.gpu_no})
 
     if args.show_data:
         from . import plot
@@ -473,11 +486,9 @@ def main():
             print('file exists: %s' % fn_config)
             sys.exit()
 
-        optimizer = Optimizer.get_example()
         model = Model(
             tf_config=tf_config,
-            data_generator=GFSwarmData.get_example(),
-            hyperparameter_optimizer=optimizer)
+            data_generator=GFSwarmData.get_example())
 
         model.regularize()
 
@@ -494,10 +505,12 @@ def main():
             # model.train()
     
     elif args.predict:
+        # ATM this command should be named `evaluate`
         model.predict()
 
-    elif args.restore:
-        model.restore()
-
     elif args.optimize:
-        model.optimize()
+        hyper_optimizer = guts.load(filename=args.optimize)
+        if args.clear:
+            hyper_optimizer.clear()
+        hyper_optimizer.optimize(model)
+

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import logging
 import copy
 from collections import OrderedDict
+import signal
 
 from skopt import gp_minimize
 from skopt import dump as dump_result
@@ -14,7 +15,8 @@ from skopt.plots import plot_convergence, plot_objective
 from skopt.plots import plot_objective, plot_evaluations
 from pyrocko.guts import Object, Int, Float, List, Tuple, String
 
-from .util import delete_if_exists
+from .util import delete_if_exists, ensure_dir
+from .data import name_to_class
 
 
 try:
@@ -29,15 +31,11 @@ def to_skopt_real(x, name, prior):
     return Real(low=x[0], high=x[1], prior=prior, name=name)
 
 
-string_to_type = {'Real': Real, 'Integer': Integer, 'Categorical': Categorical}
-
-
 class Param(Object):
     name = String.T()
-    low = Float.T()
-    high = Float.T()
-    default = Float.T()
     _type = None
+    target_attribute = String.T(default='model',
+        help='Which of models parameter should be modified (e.g. `config`)')
 
     def make_parameter(self):
         return self._type(low=self.low, high=self.high, name=self.name)
@@ -45,19 +43,27 @@ class Param(Object):
 
 class PCategorical(Param):
     prior = String.T(optional=True)
+    categories = List.T(String.T())
+    default = String.T()
     _type = Categorical
     def make_parameter(self):
-        return self._type(low=self.low, high=self.high, name=self.name,
-                prior=self.prior)
+        return self._type(name=self.name, prior=self.prior,
+                categories=self.categories)
 
 
 class PInteger(Param):
+    low = Float.T()
+    high = Float.T()
+    default = Float.T()
     _type = Integer
     def make_parameter(self):
         return self._type(low=self.low, high=self.high, name=self.name)
 
 
 class PReal(Param):
+    low = Float.T()
+    high = Float.T()
+    default = Float.T()
     prior = String.T(default='uniform')
     _type = Real
     def make_parameter(self):
@@ -87,7 +93,18 @@ class Optimizer(Object):
         for p in self.params:
             self.params_dict[p.name] = p.make_parameter()
 
+        self._config_operations = [p.name for p in self.params if
+            p.target_attribute=='config']
+
         self.optimizer_defaults = [(p.name, p.default) for p in self.params]
+
+        self._ncalls = 0
+
+        signal.signal(signal.SIGINT, self.plot_results)
+
+    def clear(self):
+        '''delete former runs.'''
+        shutil.rmtree(self.path_out)
 
     @property
     def dimensions(self):
@@ -120,16 +137,37 @@ class Optimizer(Object):
         Rather sloppy...
         '''
         new_config = copy.deepcopy(model.config)
+        self._ncalls += 1
+        model.name = 'opt_%s-' % self._ncalls + self.base_name
         for key, arg in kwargs.items():
-            for candidate in [new_config, model]:
-                setattr(candidate, key, arg)
 
+            # choose which object to modify (model or model.config)
+            if 'config' in key:
+                key = key.split('.')[-1]
+                want_modifiy = new_config
+            else:
+                want_modifiy = model
+
+            # If name is a ChunkOperation subclass, instatiate an object of
+            # that class
+            attribute = name_to_class.get(arg, False)
+            if attribute:
+                # chunk operation found
+                attribute = attribute()
+            else:
+                attribute = arg
+
+            if not getattr(want_modifiy, key):
+                raise Exception('No such parameter: %s' % key)
+
+            setattr(want_modifiy, key, attribute)
+            
         model.config = new_config
 
     def save_model(self, model):
         '''copy the `model` to the `best_model` directory.'''
         shutil.rmtree(self.best_model_dir)
-        shutil.copy(model.outdir, self.best_model_dir)
+        shutil.copytree(model.outdir, self.best_model_dir)
 
     def evaluate(self, args):
         ''' wrapper to parse gp_minimize args to model.train'''
@@ -137,7 +175,6 @@ class Optimizer(Object):
         self.announce_test(kwargs)
         self.update_model(self.model, kwargs)
         try:
-            # self.model.train_multi_gpu(kwargs)
             loss = self.model.train_and_evaluate()[0]['loss']
             if loss < self.best_loss:
                 print('found a better loss at %s' % loss)
@@ -145,7 +182,7 @@ class Optimizer(Object):
                 self.save_model(self.model)
                 self.best_loss = loss
             else:
-                shutil.rmtree(self.model.outdir)
+                self.model.clear_model()
             return loss
 
         except tf.errors.ResourceExhaustedError as e:
@@ -153,19 +190,25 @@ class Optimizer(Object):
             logging.warn('Skipping this test, loss = 9e9')
             return 9e9
 
+    def set_model(self, model):
+        logging.info('prefixing model output path to %s' % self.path_out)
+        model.prefix = self.path_out
+        self.model = model
+        self.base_name = self.model.name
+
     def optimize(self, model):
         '''Calling this method to optimize a :py:class:`pinky.model.Model`
         instance. '''
+        self.set_model(model)
+        ensure_dir(self.best_model_dir)
 
-        self.model = model
         self.result = gp_minimize(
                 func=self.evaluate,
                 dimensions=self.dimensions,
-                acq_func='EI',  # Expected Improvement
+                acq_func='EI',
                 n_calls=self.n_calls,
                 x0=self.optimizer_values)
 
-        # dump_result(self.result, self.fn_result)
         self.evaluate_result()
         self.plot_results()
 
@@ -192,14 +235,10 @@ class Optimizer(Object):
         logging.info('Best parameter loss:')
         logging.info(self.result.fun)
 
-    def ensure_directory(self, directory):
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-
-    def plot_results(self):
+    def plot_results(self, *args):
         '''Produce and save result plots. '''
-        self.ensure_result()
-        self.ensure_directory(self.extend_path('plots'))
+        # self.ensure_result()
+        ensure_dir(self.extend_path('plots'))
 
         if _plot_histogram_error:
             logging.warn(_plot_histogram_error)
@@ -208,33 +247,16 @@ class Optimizer(Object):
                 fig, ax = plot_histogram(result=self.result) #, dimension_name=dim_name)
                 fig.savefig(self.extend_path('plots/histogram_%s.pdf' % dim_name))
 
-        ax = plot_objective(
-            result=self.result,)
+        # ax = plot_objective(result=self.result,)
             # dimension_names=self.non_categorical_dimensions)
-        fig = plt.gcf()
-        fig.savefig(self.extend_path('plots/objectives.pdf'))
+        # fig = plt.gcf()
+        # fig.savefig(self.extend_path('plots/objectives.pdf'))
 
         ax = plot_evaluations(
             result=self.result,)
             # dimension_names=self.non_categorical_dimensions)
         fig = plt.gcf()
         fig.savefig(self.extend_path('plots/evaluations.pdf'))
-
-    def log_dir_name(self, params):
-        '''Helper function to transform `params` into a logging directory
-        name.'''
-
-        placeholders = '{}_{}_' * len(params)
-        identifiers = []
-        for k, v in params.items():
-            identifiers.append(k[0:3])
-            identifiers.append(v)
-
-        placeholders = placeholders.format(*identifiers)
-
-        log_dir = self.extend_path('tf_logs/' + placeholders)
-        logging.info('Created new logging directory: %s' % log_dir)
-        return log_dir
 
     @classmethod
     def get_example(cls):

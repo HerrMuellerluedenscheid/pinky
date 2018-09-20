@@ -135,7 +135,6 @@ class ImputationZero(Imputation):
     def __call__(self, chunk):
         return 0.
 
-
 class ImputationMin(Imputation):
 
     def __call__(self, chunk):
@@ -172,10 +171,7 @@ class DataGeneratorBase(Object):
         self.n_classes = 3
 
     def normalize_label(self, label):
-        return label / self.config.label_scale
-
-    def denormalize_label(self, label):
-        return label * self.config.label_scale
+        return self.config.normalize_label(label)
 
     def set_config(self, pinky_config):
         self.config = pinky_config
@@ -263,12 +259,11 @@ class DataGeneratorBase(Object):
         record_iterator = tf.python_io.tf_record_iterator(
             path=self.fn_tfrecord)
 
-        for iexample, (chunk, label) in enumerate(self.unpack_examples(record_iterator)):
+        for chunk, label in self.unpack_examples(record_iterator):
             if all_NAN(chunk):
                 logger.debug('all NAN. skipping...')
                 continue
 
-            label = self.normalize_label(label)
             yield chunk, label
 
     def generate(self):
@@ -276,7 +271,7 @@ class DataGeneratorBase(Object):
         processing (see: `process_chunk`).
         '''
         for chunk, label in self.iter_examples_and_labels():
-            yield self.process_chunk(chunk), label
+            yield self.process_chunk(chunk), self.normalize_label(label)
 
     def extract_labels(self):
         '''Overwrite this method!'''
@@ -289,7 +284,7 @@ class DataGeneratorBase(Object):
     
     @property
     def output_shapes(self):
-        return self.config.output_shapes
+        return (self.config.output_shapes)
 
     def get_dataset(self):
         return tf.data.Dataset.from_generator(
@@ -325,8 +320,7 @@ class DataGeneratorBase(Object):
             chunk[indices[ii], :] = imputation_value
 
     def process_chunk(self, chunk):
-        '''Probably better move this to the tensorflow side for better
-        performance.'''
+        '''Performs preprocessing of data chunks.'''
 
         # add noise
         if self.noise:
@@ -344,8 +338,8 @@ class DataGeneratorBase(Object):
         if num.any(num.isnan(chunk)):
             logger.warn('NANs left in chunk')
 
-        chunk -= num.min(chunk)
-        chunk /= num.max(chunk)
+        # chunk -= num.min(chunk)
+        # chunk /= num.max(chunk)
 
         return chunk
 
@@ -431,7 +425,6 @@ class DataGenerator(DataGeneratorBase):
         filter_function(tr)
 
         dt_want = self.config.deltat_want
-
         if dt_want is not None:
             if tr.deltat - dt_want > EPSILON:
                 tr.resample(dt_want)
@@ -593,7 +586,6 @@ class PileData(DataGenerator):
                     continue
 
                 label = self.extract_labels(m)
-                label = self.normalize_label(label)
 
                 yield chunk, label
 
@@ -644,6 +636,19 @@ class SeismosizerData(DataGenerator):
             self.fit_data_into_chunk(traces, chunk=chunk, tref=tref+source.time)
 
             label = self.extract_labels(source)
-            # label = self.normalize_label(label)
 
             yield chunk, label
+
+
+name_to_class = {
+        'NormalizeMax': NormalizeMax,
+        'NormalizeLog': NormalizeLog,
+        'NormalizeNthRoot': NormalizeNthRoot,
+        'NormalizeChannelMax': NormalizeChannelMax,
+        'NormalizeChannelStd': NormalizeChannelStd,
+        'NormalizeStd': NormalizeStd,
+        'ImputationMin': ImputationMin,
+        'ImputationMean': ImputationMean,
+        'ImputationMedian': ImputationMedian,
+        'ImputationZero': ImputationZero}
+
