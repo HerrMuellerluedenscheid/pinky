@@ -208,11 +208,15 @@ def hist_with_stats(data, ax):
     ax.hist(data, bins=nbins)
     med = num.mean(data)
     ax.axvline(med, color='black')
+    xlim = 1000
     ax.text(0.1, 0.99,
             r'$\mu = %1.1f\pm %1.1f$' % (med, num.std(data)),
             fontsize=9,
             horizontalalignment='left',
             transform=ax.transAxes)
+    logger.warn('%s datapoints outside xlim [-1000, 1000]' %
+            len(num.where(num.logical_or(xlim>data, -xlim<data)[0])))
+    ax.set_xlim([-xlim, xlim])
 
 
 def mislocation_hist(predictions, labels, name=None):
@@ -235,12 +239,10 @@ def mislocation_hist(predictions, labels, name=None):
 
     # hist_with_stats(errors_abs, axs[1][1])
     # axs[1][1].set_title('Absolute errors [m]')
-    xticks = range(-1000, 1200, 200)
-    xtick_labels = ((-1000, 0, 1000))
+    # xticks = range(-1000, 1500, 400)
     for ax in flatten(axs[:3]):
         ax.set_yticks([])
-        ax.set_xticks(xticks)
-        ax.set_xticklabels(xtick_labels)
+        # ax.set_xticks(xticks)
         ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.spines['right'].set_visible(False)
