@@ -296,6 +296,7 @@ class Model(Object):
             scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()))
 
     def train_and_evaluate(self, params=None):
+        self.save_model_in_summary()
         params = params or {}
         with self.sess as default:
             self.est = tf.estimator.Estimator(
@@ -311,7 +312,6 @@ class Model(Object):
 
             result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
 
-        self.save_model_in_summary()
         self.save_kernels()
         # self.save_activation_maps()
 
