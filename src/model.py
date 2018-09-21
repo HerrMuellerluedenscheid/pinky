@@ -60,7 +60,7 @@ class CNNLayer(Layer):
         logger.debug('input shape %s' % input.shape)
         kernel_height = self.kernel_height or n_channels
 
-        input = tf_fun(
+        input = tf.layers.conv2d(
             inputs=input,
             filters=self.n_filters,
             kernel_size=(kernel_height, self.kernel_width),
@@ -89,7 +89,34 @@ class CNNLayer(Layer):
 
 
 class SeparableCNNLayer(CNNLayer):
-    tf_fun = tf.layers.separable_conv2d
+
+    def chain(self, input, training=False, dropout_rate=0.):
+        _, n_channels, n_samples, _ = input.shape
+
+        logger.debug('input shape %s' % input.shape)
+        kernel_height = self.kernel_height or n_channels
+
+        input = tf.layers.separable_conv2d(
+            inputs=input,
+            filters=self.n_filters,
+            kernel_size=(kernel_height, self.kernel_width),
+            activation=self.get_activation(),
+            strides=self.strides,
+            name=self.name)
+
+        input = tf.layers.max_pooling2d(input,
+            pool_size=(self.pool_width, self.pool_height),
+            strides=(1, 1), name=self.name+'maxpool')
+
+        if logger.getEffectiveLevel() == logging.DEBUG:
+            tf.summary.image(
+                'post-%s' % self.name, tf.split(
+                    input, num_or_size_splits=self.n_filters, axis=-1)[0])
+
+        input = tf.layers.dropout(
+            input, rate=dropout_rate, training=training)
+
+        return tf.layers.batch_normalization(input, training=training)
 
 
 class DenseLayer(Layer):
@@ -118,7 +145,7 @@ class Model(Object):
     n_epochs = Int.T(default=1)
     max_steps = Int.T(default=5000)
     outdir = String.T(default=tempfile.mkdtemp(prefix='pinky-'))
-    summary_outdir= String.T(default='summary')
+    summary_outdir = String.T(default='summary')
     summary_nth_step = Int.T(default=1)
 
     shuffle_size = Int.T(
@@ -132,6 +159,8 @@ class Model(Object):
         ''' '''
         super().__init__(**kwargs)
 
+        tf_config = tf.ConfigProto()
+        tf_config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=tf_config)
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.est = None
@@ -160,7 +189,9 @@ class Model(Object):
 
     def get_summary_outdir(self):
         '''Return the directory where to store the summary.'''
-        return self.extend_path(self.summary_outdir)
+        d = self.extend_path(self.summary_outdir)
+        ensure_dir(d)
+        return d
 
     def get_outdir(self):
         '''Return the directory where to store the model.'''
@@ -439,21 +470,22 @@ def main():
         logging.basicConfig(stream=sys.stdout, level=logging.INFO)
         logger.setLevel(logging.INFO)
 
-    tf_config = tf.ConfigProto()
-    tf_config.gpu_options.allow_growth = True
-    if args.gpu_no:
-        tf_config.device_count = {'GPU': args.gpu_no}
+    # tf_config = tf.ConfigProto()
+    # tf_config.gpu_options.allow_growth = True
+    # if args.gpu_no:
+    #     tf_config.device_count = {'GPU': args.gpu_no}
 
-    models = []
+    configs = []
     if args.config:
         configs = [args.config]
-    configs.extend(args.configs)
+    if args.configs:
+        configs.extend(args.configs.split(','))
 
-    for config in configs:
+    for iconfig, config in enumerate(configs):
         model = guts.load(filename=config)
+        logger.info('Start processing model: %s (%i / %i)' % (
+            model.name, iconfig+1, len(configs)))
 
-    for model in models:
-        logger.info('Start processing model: %s' model.name)
         model.config.setup()
 
         if args.tfdebug:
@@ -461,7 +493,7 @@ def main():
 
         if args.clear:
             model.clear()
-        model.set_tfconfig(tf_config)
+        # model.set_tfconfig(tf_config)
 
         if args.show_data:
             from . import plot
@@ -537,7 +569,6 @@ def main():
             model.evaluate()
 
         elif args.predict:
-            # ATM this command should be named `evaluate`
             model.predict()
 
         elif args.optimize:
