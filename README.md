@@ -50,3 +50,5 @@ Notes
  - label normalization improves learning
  - large batch sizes (>64) perform worse than smaller  (<32) see:
    https://stats.stackexchange.com/questions/164876/tradeoff-batch-size-vs-number-of-iterations-to-train-a-neural-network
+
+ - TRY depthwise separable cnn -> less prone to overfitting, cheaper (https://eli.thegreenplace.net/2018/depthwise-separable-convolutions-for-machine-learning/)
