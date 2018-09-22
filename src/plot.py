@@ -20,6 +20,7 @@ def save_figure(fig, name=None):
     if not name:
         return
 
+    print('saving figure: %s' % name)
     fig.savefig(name+FIG_SUF)
     plt.close()
 
@@ -202,10 +203,9 @@ def confidence(data, rate=0.95):
             rate, len(data)-1, loc=num.mean(data), scale=stats.sem(data))
 
 
-def hist_with_stats(data, ax):
+def hist_with_stats(data, ax, bins=31):
     '''Plot a histogram of `data` into `ax` and label median and errors.'''
-    nbins = 71
-    ax.hist(data, bins=nbins)
+    ax.hist(data, bins=bins)
     med = num.mean(data)
     ax.axvline(med, color='black')
     xlim = 1000
@@ -225,27 +225,35 @@ def mislocation_hist(predictions, labels, name=None):
     labels = num.array(labels)
     errors = predictions - labels
     errors_abs = num.sqrt(num.sum(errors**2, axis=1))
-    
-    fig, axs = plt.subplots(2, 2, sharey=True, sharex=True)
-
-    hist_with_stats(errors.T[0], axs[0][0])
+    xlim = 1000.
+    fig = plt.figure()
+    ax1 = fig.add_subplot(221)
+    ax2 = fig.add_subplot(222, sharex=ax1, sharey=ax1)
+    ax3 = fig.add_subplot(223, sharex=ax1, sharey=ax1)
+    ax4 = fig.add_subplot(224)
+    axs = [[ax1, ax2], [ax3, ax4]]
+    bins = num.linspace(-xlim, xlim, 71)
+    hist_with_stats(errors.T[0], axs[0][0], bins=bins)
     axs[0][0].set_xlabel('Error (North) [m]')
     
-    hist_with_stats(errors.T[1], axs[0][1])
+    hist_with_stats(errors.T[1], axs[0][1], bins=bins)
     axs[0][1].set_xlabel('Error (East) [m]')
     
-    hist_with_stats(errors.T[2], axs[1][0])
+    hist_with_stats(errors.T[2], axs[1][0], bins=bins)
     axs[1][0].set_xlabel('Error (Depth) [m]')
 
-    # hist_with_stats(errors_abs, axs[1][1])
-    # axs[1][1].set_title('Absolute errors [m]')
-    # xticks = range(-1000, 1500, 400)
-    for ax in flatten(axs[:3]):
+    for ax in [ax1, ax2, ax3]:
         ax.set_yticks([])
-        # ax.set_xticks(xticks)
-        ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
+        ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
+
+    axs[1][1].hist(errors_abs, cumulative=True, bins=71, density=True,
+    histtype='step')
+    axs[1][1].set_xlabel('Distance [m]')
+    axs[1][1].set_xlim([0, 1000])
+    axs[1][1].spines['top'].set_visible(False)
+    axs[1][1].spines['right'].set_visible(False)
 
     fig.tight_layout()
     save_figure(fig, name)
