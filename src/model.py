@@ -51,6 +51,8 @@ class CNNLayer(Layer):
     pool_width = Int.T()
     pool_height = Int.T()
 
+    dilation_rate = Int.T(default=0)
+
     strides = Tuple.T(2, Int.T(), default=(1, 1))
     tf_fun = tf.layers.conv2d
 
@@ -60,13 +62,18 @@ class CNNLayer(Layer):
         logger.debug('input shape %s' % input.shape)
         kernel_height = self.kernel_height or n_channels
 
+        kwargs = {}
+        if self.dilation_rate:
+            kwargs.update({'dilation_rate': self.dilation_rate})
+
         input = tf.layers.conv2d(
             inputs=input,
             filters=self.n_filters,
             kernel_size=(kernel_height, self.kernel_width),
             activation=self.get_activation(),
             strides=self.strides,
-            name=self.name)
+            name=self.name,
+            **kwargs)
 
         input = tf.layers.max_pooling2d(input,
             pool_size=(self.pool_width, self.pool_height),
@@ -159,8 +166,9 @@ class Model(Object):
         ''' '''
         super().__init__(**kwargs)
 
-        tf_config = tf.ConfigProto()
-        tf_config.gpu_options.allow_growth = True
+        # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+        # tf_config = tf.ConfigProto(gpu_options=gpu_options)
+        # tf_config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=tf_config)
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.est = None
@@ -234,7 +242,7 @@ class Model(Object):
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         return dataset.repeat(count=self.n_epochs).batch(self.batch_size)
 
-    def model(self, features, labels, mode, params):
+    def model(self, features, labels, mode):
         '''Setup the model.'''
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
@@ -331,12 +339,17 @@ class Model(Object):
             output_dir=pjoin(self.get_summary_outdir(), subdir),
             scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()))
 
-    def train_and_evaluate(self, params=None):
+    def build_graph(self):
+        with self.sess as default:
+            _ = tf.estimator.Estimator(
+                    model_fn=self.model, model_dir=self.get_outdir())
+            print(_)
+
+    def train_and_evaluate(self):
         self.save_model_in_summary()
-        params = params or {}
         with self.sess as default:
             self.est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.get_outdir(), params=params)
+                model_fn=self.model, model_dir=self.get_outdir())
 
             train_spec = tf.estimator.TrainSpec(
                     input_fn=self.generate_dataset,
@@ -356,7 +369,7 @@ class Model(Object):
     def predict(self):
         with self.sess as default:
             self.est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.get_outdir(), params={})
+                model_fn=self.model, model_dir=self.get_outdir())
             predictions = []
             for p in self.est.predict(
                     input_fn=self.generate_predict_dataset,
@@ -367,7 +380,7 @@ class Model(Object):
         logger.debug('evaluation...')
         with self.sess as default:
             self.est = tf.estimator.Estimator(
-                model_fn=self.model, model_dir=self.get_outdir(), params={})
+                model_fn=self.model, model_dir=self.get_outdir())
             labels = [l for _, l in self.config.evaluation_data_generator.generate()]
             predictions = []
             for p in self.est.predict(
@@ -402,7 +415,7 @@ class Model(Object):
             est = tf.estimator.Estimator(
                 model_fn=self.model,
                 model_dir=self.outdir,
-                params=params,
+                # params=params,
                 config=run_config)
 
             est.train(input_fn=self.generate_dataset)
@@ -478,8 +491,13 @@ def main():
     configs = []
     if args.config:
         configs = [args.config]
+
     if args.configs:
-        configs.extend(args.configs.split(','))
+        import glob
+        a = args.configs.split(',')
+        for ai in a:
+            configs.extend(glob.glob(ai))
+        # configs.extend(args.configs.split(','))
 
     for iconfig, config in enumerate(configs):
         model = guts.load(filename=config)
