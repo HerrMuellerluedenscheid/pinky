@@ -594,24 +594,69 @@ class SeismosizerData(DataGenerator):
     fn_sources = String.T(
             help='filename containing pyrocko.gf.seismosizer.Source instances')
     fn_targets = String.T(
-            help='filename containing pyrocko.gf.seismosizer.Target instances')
+            help='filename containing pyrocko.gf.seismosizer.Target instances',
+            optional=True)
+    fn_stations = String.T(
+            help='filename containing pyrocko.model.Station instances. Will be\
+                converted to Target instances',
+            optional=True)
+
+    store_id = String.T(optional=True)
+    center_sources = Bool.T(
+            default=False,
+            help='Transform the center of sources to the center of stations')
+
     engine = LocalEngine.T()
     onset_phase = String.T(default='first(p|P)')
 
     def setup(self):
         self.sources = guts.load(filename=self.fn_sources)
-        self.targets = guts.load(filename=self.fn_targets)
+        self.targets = [] 
+
+        if self.fn_targets:
+            self.targets.extend(guts.load(filename=self.fn_targets))
+
+        if self.fn_stations:
+            stats = load_stations(self.fn_stations)
+            self.targets.extend(self.cast_stations_to_targets(stats))
+
+        if self.store_id:
+            for t in self.targets:
+                t.store_id = self.store_id
+
+        if self.center_sources:
+            self.move_sources_to_station_center()
+
         self.config.channels = [t.codes for t in self.targets]
         store_ids = [t.store_id for t in self.targets]
         store_id = set(store_ids)
         assert len(store_id) == 1, 'More than one store used. Not \
                 implemented yet'
+
         self.store = self.engine.get_store(store_id.pop())
 
         filter_oob(self.sources, self.targets, self.store.config)
 
         dt = self.config.deltat_want or self.store.config.deltat
         self.n_samples = int((self.config.sample_length + self.config.tpad) / dt)
+
+    def move_sources_to_station_center(self):
+        '''Transform the center of sources to the center of stations.'''
+        lat, lon = orthodrome.geographic_midpoint_locations(self.targets)
+        for s in self.sources:
+            s.lat = lat
+            s.lon = lon
+
+    def cast_stations_to_targets(self, stations):
+        targets = []
+        channels = 'ENZ'
+        for s in stations:
+            targets.extend(
+                [Target(codes=(s.network, s.station, s.location, c),
+                    lat=s.lat, lon=s.lon, elevation=s.elevation,) for c in
+                    channels])
+
+        return targets
 
     def extract_labels(self, source):
         return (source.north_shift, source.east_shift, source.depth)
