@@ -463,7 +463,7 @@ def main():
     parser.add_argument('--new-config')
     parser.add_argument('--clear', help='delete remaints of former runs',
             action='store_true')
-    parser.add_argument('--show-data', action='store_true')
+    parser.add_argument('--show-data', type=int, default=9, nargs='?')
     parser.add_argument('--ngpu', help='number of GPUs to use')
     parser.add_argument('--gpu-no', help='GPU number to use', type=int)
     parser.add_argument('--debug', help='enable logging level DEBUG', action='store_true')
@@ -515,7 +515,7 @@ def main():
 
         if args.show_data:
             from . import plot
-            plot.show_data(model, shuffle=True)
+            plot.show_data(model, nexamples=args.show_data, shuffle=False)
             plt.show()
 
         elif args.write_tfrecord:
