@@ -23,7 +23,7 @@ import sys
 import copy
 
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
-from .util import delete_if_exists, first_element, filter_oob
+from .util import delete_if_exists, first_element, filter_oob, ensure_list
 
 
 pjoin = os.path.join
@@ -50,7 +50,7 @@ class Normalization(ChunkOperation):
 
 class NormalizeMax(Normalization):
     '''Normalize the entire chunk by chunk's absolut maximum.'''
-    
+
     def __call__(self, chunk):
         chunk /= num.nanmax(num.abs(chunk))
 
@@ -69,7 +69,7 @@ class NormalizeLog(Normalization):
 
 class NormalizeNthRoot(Normalization):
     '''Normalize traces by their Nth root.
-    
+
     Note: polarities get lost.'''
     nth_root = Int.T(default=4)
 
@@ -155,7 +155,7 @@ class ImputationMedian(Imputation):
 
 class DataGeneratorBase(Object):
     '''This is the base class for all generators.
-    
+
     This class to dump and load data to/from all subclasses into
     TFRecordDatasets.
     '''
@@ -251,9 +251,9 @@ class DataGeneratorBase(Object):
 
     def iter_examples_and_labels(self):
         '''Subclass this method!
-        
+
         Yields: feature, label
-        
+
         Chunks that are all NAN will be skipped.
         '''
         record_iterator = tf.python_io.tf_record_iterator(
@@ -281,7 +281,7 @@ class DataGeneratorBase(Object):
         '''Iterate through labels.'''
         for _, label in self.iter_examples_and_labels():
             yield label
-    
+
     @property
     def output_shapes(self):
         return (self.config.output_shapes)
@@ -361,7 +361,7 @@ class ChannelStackGenerator(DataGeneratorBase):
     provided by the `generator`.
     '''
     in_generator = DataGeneratorBase.T(help='The generator to be compressed')
-        
+
     def setup(self):
         self.nsl_to_indices_orig = copy.deepcopy(
                 self.in_generator.nsl_to_indices)
@@ -415,7 +415,7 @@ class DataGenerator(DataGeneratorBase):
         '''Trace preprocessing
 
         :param tr: pyrocko.tr.Trace object
-        
+
         Demean, type casting to float32, filtering, adjust sampling rates.
         '''
         tr.ydata = tr.ydata.astype(num.float32)
@@ -463,7 +463,7 @@ class DataGenerator(DataGeneratorBase):
 
     def fit_data_into_chunk(self, traces, chunk, indices=None, tref=0):
         '''Fit all `traces` into a 2 demensional numpy array.
-        
+
         :param traces: list of pyrocko.trace.Trace instances
         :param indices: list of indices where the traces in `traces` are
             supposed to be filled into the array. If this parameter is None
@@ -611,7 +611,7 @@ class SeismosizerData(DataGenerator):
 
     def setup(self):
         self.sources = guts.load(filename=self.fn_sources)
-        self.targets = [] 
+        self.targets = []
 
         if self.fn_targets:
             self.targets.extend(guts.load(filename=self.fn_targets))
@@ -662,6 +662,9 @@ class SeismosizerData(DataGenerator):
         return (source.north_shift, source.east_shift, source.depth)
 
     def iter_examples_and_labels(self):
+        ensure_list(self.sources)
+        ensure_list(self.targets)
+
         response = self.engine.process(
             sources=self.sources,
             targets=self.targets)
@@ -669,7 +672,7 @@ class SeismosizerData(DataGenerator):
         for isource, source in enumerate(response.request.sources):
             traces = [x.trace.pyrocko_trace() for x in \
                     response.results_list[isource]]
-            
+
             for tr in traces:
                 self.preprocess(tr)
             arrivals = [self.store.t(self.onset_phase,
