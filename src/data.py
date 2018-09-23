@@ -635,7 +635,8 @@ class SeismosizerData(DataGenerator):
 
         self.store = self.engine.get_store(store_id.pop())
 
-        filter_oob(self.sources, self.targets, self.store.config)
+        self.sources = filter_oob(self.sources, self.targets, self.store.config)
+        print('xxx', len(self.sources))
 
         dt = self.config.deltat_want or self.store.config.deltat
         self.n_samples = int((self.config.sample_length + self.config.tpad) / dt)

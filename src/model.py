@@ -455,7 +455,7 @@ def main():
     parser.add_argument('--predict', action='store_true',
             help='Predict from input of `predict_data_generator` in config.')
     parser.add_argument('--optimize', metavar='FILENAME',
-            help='use optimizer defined in FILENAME') 
+            help='use optimizer defined in FILENAME')
     parser.add_argument('--write-tfrecord', metavar='FILENAME',
         help='write data_generator out to FILENAME')
     parser.add_argument('--from-tfrecord', metavar='FILENAME',

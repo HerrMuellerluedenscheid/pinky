@@ -34,30 +34,61 @@ def filter_oob(sources, targets, config):
     slats, slons = num.empty(nsources), num.empty(nsources)
     sdepth = num.empty(nsources)
     tlats, tlons = num.empty(ntargets), num.empty(ntargets)
+    televations = num.empty(ntargets)
 
     for i_s, s in enumerate(sources):
         slats[i_s], slons[i_s], sdepth[i_s] = *s.effective_latlon, s.depth
 
     for i_t, t in enumerate(targets):
         tlats[i_t], tlons[i_t] = t.effective_latlon
+        televations[i_t] = t.elevation
+
+    # dmax = config.distance_max
+    # nsources = len(sources)
+    # sources_out = []
+    # for i_s, s in enumerate(sources[::-1]):
+    #     for t in targets:
+    #         print(t.distance_to(s))
+    #         if t.distance_to(s) > dmax:
+    #             print('break')
+    #             break
+    #     else:
+    #         print('fine')
+    #         sources_out.append(s)
+
+    # return sources_out
 
     dists = num.empty((ntargets, nsources))
+    depths = num.empty((ntargets, nsources))
     for i in range(ntargets):
         dists[i] = orthodrome.distance_accurate50m_numpy(
                 slats, slons, tlats[i], tlons[i])
+        depths[i] = sdepth + televations[i]
 
-    i_dist = num.logical_or(
-            dists > config.distance_max, dists < config.distance_min)
-    i_depth = num.where(num.logical_or(
-            sdepth > config.source_depth_max, sdepth < config.source_depth_min))[0]
-    i_filter = num.union1d(i_depth, num.any(i_dist, axis=1))
+    i_dist = num.where(num.any(num.logical_or(
+            dists > config.distance_max-100, dists < config.distance_min+100), axis=0))[0]
+    i_depth = num.where(num.any(num.logical_or(
+            depths > config.source_depth_max-100, depths < config.source_depth_min+100), axis=0))[0]
+    print(i_depth)
+    i_filter = num.union1d(i_depth, i_dist)
 
+    print(dists)
     logger.warn('Removing %i / %i sources which would be out of bounds' %
             (len(i_filter), nsources))
 
     for i in i_filter[::-1]:
-        del sources[i]
-
+        # print('.'*10)
+        # for t in targets:
+        #     print(sources[i].distance_to(t))
+        sources.pop(i)
+        # del sources[i]
+    _d = [t.distance_to(s) for t in targets for s in sources]
+    print(max(_d))
+    print(min(_d))
+    _d = [s.depth+t.elevation for t in targets for s in sources]
+    print(min(_d))
+    print(max(_d))
+    return sources
 
 def delete_if_exists(dir_or_file):
     '''Deletes `dir_or_file` if exists'''

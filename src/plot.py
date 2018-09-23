@@ -75,11 +75,15 @@ def plot_locations(locations, color, title, axs=None):
     return fig, axs
 
 
-def show_data(model, shuffle=False):
-    '''Plot 2 dimensional feature images and waveform sections.'''
+def show_data(model, n=9, shuffle=False):
+    '''Plot 2 dimensional feature images and waveform sections.
+
+    :param model `pinky.model.Model` instance:
+    :param n: number of plots to produce
+    :param shuffle: if `True` randomly select the `n` samples'''
+
     yscale = 10.  # Use this to tune amplitudes of waveform plots
-    n = 9  # total number of plots
-    n_rows = 3
+    n_rows = max(num.sqrt(n), 1)
     figsize = (10, 8)
     boxstyle = dict(boxstyle='round', facecolor='white', alpha=0.7)
     fig, axs_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
@@ -91,7 +95,6 @@ def show_data(model, shuffle=False):
 
     model.config.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
-            # model.config.prediction_data_generator.generate()):
             model.config.data_generator.generate()):
 
         if i == n:
