@@ -12,6 +12,15 @@ def ensure_dir(p):
         os.makedirs(p)
 
 
+class ListEmpty(Exception):
+    pass
+
+
+def ensure_list(l):
+    if not len(l):
+        raise ListEmpty()
+
+
 def first_element(x):
     if len(x) <= 1:
         return x[0]
@@ -39,15 +48,12 @@ def filter_oob(sources, targets, config):
 
     i_dist = num.logical_or(
             dists > config.distance_max, dists < config.distance_min)
+    i_depth = num.where(num.logical_or(
+            sdepth > config.source_depth_max, sdepth < config.source_depth_min))[0]
+    i_filter = num.union1d(i_depth, num.any(i_dist, axis=1))
 
-    i_depth = num.logical_or(
-            sdepth > config.source_depth_max, sdepth < config.source_depth_min)
-
-    i_filter = num.where(num.any(num.logical_or(i_dist, i_depth), axis=0))[0]
-    i_filter.sort()
-
-    logger.debug('Removing %i sources which would be out of bounds' %
-            len(i_filter))
+    logger.warn('Removing %i / %i sources which would be out of bounds' %
+            (len(i_filter), nsources))
 
     for i in i_filter[::-1]:
         del sources[i]
