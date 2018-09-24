@@ -1,18 +1,21 @@
+import matplotlib
+font = {'font.size': 12}
+matplotlib.rcParams.update(font)
+
 import matplotlib.pyplot as plt
 import math
 import numpy as num
 import logging
 from scipy import stats
 
-from matplotlib import rc
-#plt.rc('text', usetex=True)
-
-
 logger = logging.getLogger('pinky.plot')
+
+FIG_SIZE = (8.5/2., 11./3.)
 POINT_SIZE = 2.
 FIG_SUF = '.pdf'
 NPOINTS = 110
 
+logger.debug('setting figsize to: %s x %s' % (FIG_SIZE))
 
 def save_figure(fig, name=None):
     '''Saves figure `fig` if `name` is defined. Closes the figure after
@@ -38,7 +41,15 @@ def clear_ax(ax):
 
 def adjust(fig):
     fig.subplots_adjust(
-        left=0.1, right=0.99, top=0.98, bottom=0.02, wspace=0.02, hspace=0.07)
+        left=0.14, right=0.98, top=0.98, bottom=0.15, wspace=0.01, hspace=0.01)
+
+
+def get_notleft_axs(axs_grid):
+    '''Returns a list of left most axes objects from 2 dimensional grid.'''
+    x = []
+    for axs in axs_grid:
+        x.extend(axs[1:])
+    return x
 
 
 def get_left_axs(axs_grid):
@@ -46,10 +57,23 @@ def get_left_axs(axs_grid):
     return [ax[0] for ax in axs_grid]
 
 
+def get_bottom_axs(axs_grid):
+    '''Returns a list of bottom most axes objects from 2 dimensional grid.'''
+    return axs_grid[-1]
+
+
+def get_notbottom_axs(axs_grid):
+    '''Returns a list of every but bottom most axes objects from 2 dimensional grid.'''
+    if len(axs_grid) > 1:
+        return axs_grid[:-1][0]
+    else:
+        return []
+
+
 def plot_locations(locations, color, title, axs=None):
     fig = None
     if axs is None:
-        fig, axs = plt.subplots(1, 2)
+        fig, axs = plt.subplots(1, 2, figsize=FIG_SIZE)
 
     nlocations = len(locations)
     nlabel_components = len(locations[0])
@@ -75,44 +99,50 @@ def plot_locations(locations, color, title, axs=None):
     return fig, axs
 
 
-def show_data(model, n=9, shuffle=False):
+def show_data(model, n=9, nskip=0, shuffle=False):
     '''Plot 2 dimensional feature images and waveform sections.
 
     :param model `pinky.model.Model` instance:
     :param n: number of plots to produce
     :param shuffle: if `True` randomly select the `n` samples'''
 
-    yscale = 10.  # Use this to tune amplitudes of waveform plots
-    n_rows = max(num.sqrt(n), 1)
-    figsize = (10, 8)
+    yscale = 2.  # Use this to tune amplitudes of waveform plots
+    n_rows = int(max(num.sqrt(n), 1))
     boxstyle = dict(boxstyle='round', facecolor='white', alpha=0.7)
-    fig, axs_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
-    bottom_axs = axs_grid[-1]
+    fig, axs_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=FIG_SIZE,
+            squeeze=False)
+
+    debug = logger.getEffectiveLevel() == logging.DEBUG
+
     axs = flatten(axs_grid)
 
-    fig_w, axs_w_grid = plt.subplots(math.ceil(n/n_rows), n_rows, figsize=figsize)
+    fig_w, axs_w_grid = plt.subplots(math.ceil(n/n_rows), n_rows,
+            figsize=FIG_SIZE, squeeze=False)
     axs_w = flatten(axs_w_grid)
 
     model.config.data_generator.shuffle = shuffle
     for i, (chunk, label) in enumerate(
             model.config.data_generator.generate()):
 
-        if i == n:
+        if i<nskip:
+            continue
+        elif i == n+nskip:
             break
 
-        axs[i].imshow(chunk, aspect='auto', cmap='gist_gray')
+        i -= nskip
+        axs[i].imshow(chunk, aspect='auto', cmap='gist_gray', origin='lower')
         string = ' '.join([' %1.2f |'% l for l in label])
         string += '\nminmax= %1.1f| %1.1f' %(num.nanmin(chunk), num.nanmax(chunk))
-        axs[i].text(
-                0, 0, string, size=7,
-                transform=axs[i].transAxes, bbox=boxstyle)
+        if debug:
+            axs[i].text(
+                0, 0, string, transform=axs[i].transAxes, bbox=boxstyle)
 
         _, n_samples = chunk.shape
         xdata = num.arange(n_samples)
 
         for irow, row in enumerate(chunk):
             row -= num.mean(row)
-            axs_w[i].plot(xdata, irow+yscale*row, color='grey', linewidth=0.5)
+            axs_w[i].plot(xdata, irow+yscale*row, color='black', linewidth=0.5)
 
     [clear_ax(ax) for ax in axs_w]
 
@@ -125,17 +155,22 @@ def show_data(model, n=9, shuffle=False):
         locs.append(i)
         labels.append('.'.join(nslc))
 
-    left_axs = []
     for axs in (get_left_axs(x) for x in (axs_grid, axs_w_grid)):
         for ax in axs:
             ax.set_yticks(locs)
-            ax.set_yticklabels(labels, size=7)
-            left_axs.append(ax)
+            ax.set_yticklabels(labels)
 
-    for ax in axs:
-        if ax in left_axs:
-            continue
-        ax.set_yticks([])
+    for axs in (get_notleft_axs(x) for x in (axs_grid, axs_w_grid)):
+        for ax in axs:
+            ax.set_yticks([])
+
+    for axs in (get_bottom_axs(x) for x in (axs_grid, axs_w_grid)):
+        for ax in axs:
+            ax.set_xlabel('Sample')
+
+    for axs in (get_notbottom_axs(x) for x in (axs_grid, axs_w_grid)):
+        for ax in axs:
+            ax.set_xticks([])
 
     adjust(fig)
     adjust(fig_w)
@@ -147,13 +182,13 @@ def show_data(model, n=9, shuffle=False):
             labels_train, 'blue', title='train', axs=axs_labels)
 
     save_figure(fig_labels, 'pinky_labels')
-    save_figure(fig, 'pinky_image')
-    save_figure(fig_w, 'pinky_waves.pdf')
+    save_figure(fig, 'pinky_features')
+    save_figure(fig_w, 'pinky_waves')
 
 
 def show_kernels_dense(weights, name=None):
     '''2 dimensional images of dense weights.'''
-    fig, axs = plt.subplots(1, 1)
+    fig, axs = plt.subplots(1, 1, figsize=FIG_SIZE)
 
     axs.imshow(weights, cmap='gray')
     axs.axis('off')
@@ -167,7 +202,7 @@ def show_kernels(weights, name=None):
     n_columns = 8
     n_weights = weights.shape[-1]
     n_rows = int(n_weights // n_columns)
-    fig, axs = plt.subplots(n_rows, n_columns)
+    fig, axs = plt.subplots(n_rows, n_columns, figsize=FIG_SIZE)
 
     axs = [ax for iax in axs for ax in iax]
     
@@ -180,25 +215,6 @@ def show_kernels(weights, name=None):
         ax.set_xticks([])
 
     save_figure(fig, name)
-
-
-def getActivations(sess, layer, stimuli):
-    '''Plot activations for a certain stimulus.'''
-    units = sess.run(
-        layer, feed_dict={x: num.reshape(stimuli,
-		[1,784], order='F'), keep_prob:1.0})
-    plotNNFilter(units)
-
-
-def plotNNFilter(units):
-    filters = units.shape[3]
-    plt.figure(1, figsize=(20,20))
-    n_columns = 6
-    n_rows = math.ceil(filters / n_columns) + 1
-    for i in range(filters):
-        plt.subplot(n_rows, n_columns, i+1)
-        plt.title('Filter ' + str(i))
-        plt.imshow(units[0,:,:,i], interpolation="nearest", cmap="gray")
 
 
 def confidence(data, rate=0.95):
@@ -214,7 +230,6 @@ def hist_with_stats(data, ax, bins=31):
     xlim = 1000
     ax.text(0.1, 0.99,
             r'$\mu = %1.1f\pm %1.1f$' % (med, num.std(data)),
-            fontsize=9,
             horizontalalignment='left',
             transform=ax.transAxes)
     logger.warn('%s datapoints outside xlim [-1000, 1000]' %
@@ -229,11 +244,11 @@ def mislocation_hist(predictions, labels, name=None):
     errors = predictions - labels
     errors_abs = num.sqrt(num.sum(errors**2, axis=1))
     xlim = 1000.
-    fig = plt.figure()
-    ax1 = fig.add_subplot(221)
-    ax2 = fig.add_subplot(222, sharex=ax1, sharey=ax1)
-    ax3 = fig.add_subplot(223, sharex=ax1, sharey=ax1)
-    ax4 = fig.add_subplot(224)
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax1 = fig.add_subplot(221, figsize=FIG_SIZE)
+    ax2 = fig.add_subplot(222, sharex=ax1, sharey=ax1, figsize=FIG_SIZE)
+    ax3 = fig.add_subplot(223, sharex=ax1, sharey=ax1, figsize=FIG_SIZE)
+    ax4 = fig.add_subplot(224, figsize=FIG_SIZE)
     axs = [[ax1, ax2], [ax3, ax4]]
     bins = num.linspace(-xlim, xlim, 71)
     hist_with_stats(errors.T[0], axs[0][0], bins=bins)
@@ -297,7 +312,7 @@ def plot_predictions_and_labels(predictions, labels, name=None):
     predictions = num.array(predictions)
     labels = num.array(labels)
     
-    fig, axs = plt.subplots(2, 2)
+    fig, axs = plt.subplots(2, 2, figsize=FIG_SIZE)
     for (px, py, pz), (lx, ly, lz) in zip(predictions, labels):
         # top left
         error_map((px, py), (lx, ly), axs[0][0])
@@ -316,6 +331,4 @@ def plot_predictions_and_labels(predictions, labels, name=None):
 
     error_contourf(predictions, labels, axs[1][1])
     save_figure(fig, name)
-
-
 
