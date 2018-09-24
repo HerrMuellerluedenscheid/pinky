@@ -4,7 +4,7 @@ import logging
 import numpy as num
 from pyrocko import orthodrome
 
-logger = logging.getLogger()
+logger = logging.getLogger('pinky.util')
 
 
 def ensure_dir(p):
@@ -109,4 +109,5 @@ def append_to_dict(d, k, v):
     _m = d.get(k, [])
     _m.append(v)
     d[k] = _m
+
 
