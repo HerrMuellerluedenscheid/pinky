@@ -17,7 +17,7 @@ setup(
     package_dir={'pinky': 'src'},
     entry_points={
         'console_scripts': [
-            'pinky = pinky.model:main',
+            'pinky = pinky.pinky:main',
         ]
     }
 )
