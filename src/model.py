@@ -162,9 +162,10 @@ class Model(Object):
         ''' '''
         super().__init__(**kwargs)
 
-        # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
-        # tf_config = tf.ConfigProto(gpu_options=gpu_options)
-        # tf_config.gpu_options.allow_growth = True
+        if not tf_config:
+            tf_config = tf.ConfigProto()
+            tf_config.gpu_options.allow_growth = True
+
         self.sess = tf.Session(config=tf_config)
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.est = None
