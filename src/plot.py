@@ -1,8 +1,12 @@
 import matplotlib
-font = {'font.size': 12}
+MAIN_FONT_SIZE = 10
+font = {'font.size': MAIN_FONT_SIZE}
 matplotlib.rcParams.update(font)
-
+from matplotlib.ticker import FuncFormatter
+from mpl_toolkits.axes_grid1.colorbar import colorbar
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import math
 import numpy as num
 import logging
@@ -10,10 +14,11 @@ from scipy import stats
 
 logger = logging.getLogger('pinky.plot')
 
-FIG_SIZE = (8.5/2., 11./3.)
+FIG_SIZE = (5., 4.230769230769231)
+# FIG_SIZE = (8.5, 11.)
 POINT_SIZE = 2.
 FIG_SUF = '.pdf'
-NPOINTS = 110
+NPOINTS = 200
 
 logger.debug('setting figsize to: %s x %s' % (FIG_SIZE))
 
@@ -23,8 +28,9 @@ def save_figure(fig, name=None):
     if not name:
         return
 
-    print('saving figure: %s' % name)
-    fig.savefig(name+FIG_SUF)
+    name = name + FIG_SUF
+    logger.info('saving figure: %s' % name)
+    fig.savefig(name)
     plt.close()
 
 
@@ -135,7 +141,8 @@ def show_data(model, n=9, nskip=0, shuffle=False):
         string += '\nminmax= %1.1f| %1.1f' %(num.nanmin(chunk), num.nanmax(chunk))
         if debug:
             axs[i].text(
-                0, 0, string, transform=axs[i].transAxes, bbox=boxstyle)
+                0, 0, string, size=MAIN_FONT_SIZE-1,
+                transform=axs[i].transAxes, bbox=boxstyle)
 
         _, n_samples = chunk.shape
         xdata = num.arange(n_samples)
@@ -224,17 +231,31 @@ def confidence(data, rate=0.95):
 
 def hist_with_stats(data, ax, bins=31):
     '''Plot a histogram of `data` into `ax` and label median and errors.'''
-    ax.hist(data, bins=bins)
+    ax.hist(data, bins=bins, histtype='stepfilled')
     med = num.mean(data)
-    ax.axvline(med, color='black')
-    xlim = 1000
-    ax.text(0.1, 0.99,
-            r'$\mu = %1.1f\pm %1.1f$' % (med, num.std(data)),
-            horizontalalignment='left',
+    ax.axvline(med, linestyle='dashed', color='black', alpha=0.8)
+    xlim = 500
+    ax.text(0.99, 0.99,
+            r'$\mu = %1.1f\pm %1.1f$ m' % (med, num.std(data)),
+            size=MAIN_FONT_SIZE-1,
+            horizontalalignment='right',
+            verticalalignment='top',
             transform=ax.transAxes)
     logger.warn('%s datapoints outside xlim [-1000, 1000]' %
             len(num.where(num.logical_or(xlim>data, -xlim<data)[0])))
     ax.set_xlim([-xlim, xlim])
+
+
+def to_percent(y, position):
+    # Ignore the passed in position. This has the effect of scaling the default
+    # tick locations.
+    s = str(int(100 * y))
+
+    # The percent symbol needs escaping in latex
+    if matplotlib.rcParams['text.usetex'] is True:
+        return s + r'$\%$'
+    else:
+        return s + '%'
 
 
 def mislocation_hist(predictions, labels, name=None):
@@ -243,22 +264,22 @@ def mislocation_hist(predictions, labels, name=None):
     labels = num.array(labels)
     errors = predictions - labels
     errors_abs = num.sqrt(num.sum(errors**2, axis=1))
-    xlim = 1000.
+    xlim = 500.
     fig = plt.figure(figsize=FIG_SIZE)
-    ax1 = fig.add_subplot(221, figsize=FIG_SIZE)
-    ax2 = fig.add_subplot(222, sharex=ax1, sharey=ax1, figsize=FIG_SIZE)
-    ax3 = fig.add_subplot(223, sharex=ax1, sharey=ax1, figsize=FIG_SIZE)
-    ax4 = fig.add_subplot(224, figsize=FIG_SIZE)
+    ax1 = fig.add_subplot(221)
+    ax2 = fig.add_subplot(222, sharex=ax1, sharey=ax1)
+    ax3 = fig.add_subplot(223, sharex=ax1, sharey=ax1)
+    ax4 = fig.add_subplot(224)
     axs = [[ax1, ax2], [ax3, ax4]]
     bins = num.linspace(-xlim, xlim, 71)
     hist_with_stats(errors.T[0], axs[0][0], bins=bins)
-    axs[0][0].set_xlabel('Error (North) [m]')
+    axs[0][0].set_xlabel('North [m]')
     
     hist_with_stats(errors.T[1], axs[0][1], bins=bins)
-    axs[0][1].set_xlabel('Error (East) [m]')
+    axs[0][1].set_xlabel('East [m]')
     
     hist_with_stats(errors.T[2], axs[1][0], bins=bins)
-    axs[1][0].set_xlabel('Error (Depth) [m]')
+    axs[1][0].set_xlabel('Depth [m]')
 
     for ax in [ax1, ax2, ax3]:
         ax.set_yticks([])
@@ -267,13 +288,25 @@ def mislocation_hist(predictions, labels, name=None):
         ax.spines['right'].set_visible(False)
 
     axs[1][1].hist(errors_abs, cumulative=True, bins=71, density=True,
-    histtype='step')
+    	histtype='step')
+
+    formatter = FuncFormatter(to_percent)
+
+    # Set the formatter
+    axs[1][1].yaxis.set_major_formatter(formatter)
+
     axs[1][1].set_xlabel('Distance [m]')
     axs[1][1].set_xlim([0, 1000])
     axs[1][1].spines['top'].set_visible(False)
     axs[1][1].spines['right'].set_visible(False)
 
-    fig.tight_layout()
+    fig.suptitle('Deviations from DD catalog')
+
+    add_char_labels(flatten(axs))
+
+    fig.subplots_adjust(
+        left=0.08, right=0.96, top=0.88, bottom=0.1, wspace=0.35, hspace=0.35)
+
     save_figure(fig, name)
 
 
@@ -294,15 +327,117 @@ def error_contourf(predictions, labels, ax):
     med = num.median(errors)
     vmin = 0.
     vmax = med + 1.5 * num.std(errors)
-    s = ax.scatter(predictions.T[0], -predictions.T[2], s=6, c=errors, linewidth=0,
+    s = ax.scatter(predictions.T[0], predictions.T[2], s=6, c=errors, linewidth=0,
             vmin=vmin, vmax=vmax)
     ax.set_xlabel('N-S')
     ax.set_ylabel('Z')
-    plt.gcf().colorbar(s)
-    # ax.contourf(predictions, errors)
+    # colorbar
+    cax = inset_axes(ax,
+		     width="2%",  # width = 10% of parent_bbox width
+		     height="50%",  # height : 50%
+		     loc='lower left',
+		     bbox_to_anchor=(0., 0.05, 1, 1),
+		     bbox_transform=ax.transAxes,
+		     borderpad=0,
+		     )
+    cbar = colorbar(s, cax=cax)
+    cbar.ax.tick_params(labelsize=MAIN_FONT_SIZE-2)
+
+
+def rotate(locations, degrees):
+    r = degrees * num.pi / 180.
+    rotmat = num.array(((num.cos(r), -num.sin(r), 0.),
+          (num.sin(r), num.cos(r), 0.),
+          (0., 0., 1.)))
+    return num.dot(locations, rotmat.T)
+
+
+def add_char_labels(axes, chars='abcdefghijklmnopqstuvwxyz'):
+    for label, ax in zip(chars, axes):
+        ax.text(-0.05, 1.05, '(%s)' % label, transform=ax.transAxes,
+            horizontalalignment='right', verticalalignment='bottom')
 
 
 def plot_predictions_and_labels(predictions, labels, name=None):
+
+    if NPOINTS:
+        predictions = predictions[: NPOINTS]
+        labels = labels[: NPOINTS]
+        logger.warn('limiting number of points in scatter plot to %s' % NPOINTS)
+
+    predictions /= 1000.
+    labels /= 1000.
+
+    logger.debug('plot predictions and labels')
+
+    predictions = num.array(predictions)
+    labels = num.array(labels)
+    fig = plt.figure(figsize=(5, 5))
+
+    gs = gridspec.GridSpec(2, 2, width_ratios=[1, 2])
+    top_left = fig.add_subplot(gs[0])
+    top_right = fig.add_subplot(gs[1])
+    bottom_left = fig.add_subplot(gs[2])
+    bottom_right = fig.add_subplot(gs[3], sharey=top_right)
+
+    top_right.yaxis.tick_right()
+    bottom_right.yaxis.tick_right()
+    top_right.yaxis.set_label_position('right')
+    bottom_right.yaxis.set_label_position('right')
+
+    max_range = num.max(num.abs(num.min(predictions, axis=0) - \
+            num.max(predictions, axis=0)))
+
+    def _update_axis_lim(axis_data):
+        dmax = num.max(axis_data)
+        dmin = num.min(axis_data)
+        r = dmax-dmin
+        delta = (max_range - r) / 2.
+        return dmin - delta, dmax + delta
+
+    px, py, pz = predictions.T
+    lx, ly, lz = labels.T
+
+    error_map((py, px), (ly, lx),  top_left)
+    top_left.set_ylabel('N-S [km]')
+    top_left.set_xlabel('E-W [km]')
+    top_left.set_aspect('equal')
+    top_left.set_xlim((-0.5, 1.0))
+
+    # with rotation
+    degrees = 12
+    predictions = rotate(predictions, degrees=degrees)
+    labels = rotate(labels, degrees=degrees)
+    px, py, pz = predictions.T
+    lx, ly, lz = labels.T
+
+    eshift = 0.5
+    error_map((py+eshift, pz), (ly+eshift, lz), bottom_left)
+    bottom_left.set_xlabel('E-W (rot.) [km]')
+    bottom_left.set_ylabel('Depth [km]')
+    bottom_left.set_aspect('equal')
+    bottom_left.set_xlim((-0.5, 0.5))
+    bottom_left.invert_yaxis()
+
+    error_map((px, pz), (lx, lz), bottom_right)
+    bottom_right.set_xlabel('N-S (rot.) [km]')
+    bottom_right.set_ylabel('Depth [km]')
+    bottom_right.invert_yaxis()
+
+    error_contourf(predictions, labels, top_right)
+    top_right.set_ylabel('Depth [km]')
+    top_right.set_xlabel('N-S (rot.) [km]')
+
+    fig.subplots_adjust(
+        left=0.097, right=0.87, top=0.95, bottom=0.1, wspace=0.02, hspace=0.35)
+
+    add_char_labels([top_left, top_right, bottom_left, bottom_right])
+
+    save_figure(fig, name)
+
+
+def plot_predictions_and_labels_automatic(predictions, labels, name=None):
+
     if NPOINTS:
         predictions = predictions[: NPOINTS]
         labels = labels[: NPOINTS]
@@ -311,24 +446,44 @@ def plot_predictions_and_labels(predictions, labels, name=None):
 
     predictions = num.array(predictions)
     labels = num.array(labels)
-    
-    fig, axs = plt.subplots(2, 2, figsize=FIG_SIZE)
+    fig = plt.figure(figsize=FIG_SIZE)
+
+    top_left = fig.add_subplot(2, 2, 1)
+    top_right = fig.add_subplot(2, 2, 2, sharey=top_left)
+    bottom_left = fig.add_subplot(2, 2, 3, sharex=top_left)
+    bottom_right = fig.add_subplot(2, 2, 4)
+
+    max_range = num.max(num.abs(num.min(predictions, axis=0) - \
+            num.max(predictions, axis=0)))
+
+    def _update_axis_lim(axis_data):
+        dmax = num.max(axis_data)
+        dmin = num.min(axis_data)
+        r = dmax-dmin
+        delta = (max_range - r) / 2.
+        return dmin - delta, dmax + delta
+
     for (px, py, pz), (lx, ly, lz) in zip(predictions, labels):
-        # top left
-        error_map((px, py), (lx, ly), axs[0][0])
-        axs[0][0].set_xlabel('N-S')
-        axs[0][0].set_ylabel('E-W')
+        error_map((px, py), (lx, ly), top_left)
+        top_left.set_xlabel('N-S')
+        top_left.set_ylabel('E-W')
+        # top_left.set_xlim(*_update_axis_lim(px))
+        # top_left.set_ylim(*_update_axis_lim(py))
+        top_left.set_xlim(*_update_axis_lim(px+lx))
+        top_left.set_ylim(*_update_axis_lim(py+ly))
 
-        # bottom left 
-        error_map((px, -pz), (lx, -lz), axs[1][0])
-        axs[1][0].set_xlabel('N-S')
-        axs[1][0].set_ylabel('Z')
+        error_map((-pz, py), (-lz, ly), top_right)
+        top_right.set_xlabel('Z')
+        top_right.set_ylabel('E-W')
+        top_right.set_xlim(*_update_axis_lim(-pz))
+        top_right.set_ylim(*_update_axis_lim(py))
 
-        # top right
-        error_map((-pz, py), (-lz, ly), axs[0][1])
-        axs[0][1].set_xlabel('Z')
-        axs[0][1].set_ylabel('E-W')
+        error_map((px, -pz), (lx, -lz), bottom_left)
+        bottom_left.set_xlabel('N-S')
+        bottom_left.set_ylabel('Z')
+        bottom_left.set_xlim(*_update_axis_lim(px))
+        bottom_left.set_ylim(*_update_axis_lim(-pz))
 
-    error_contourf(predictions, labels, axs[1][1])
+    error_contourf(predictions, labels, bottom_right)
     save_figure(fig, name)
 
