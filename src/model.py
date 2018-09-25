@@ -76,6 +76,7 @@ class CNNLayer(Layer):
             strides=(1, 1), name=self.name+'maxpool')
 
         if logger.getEffectiveLevel() == logging.DEBUG:
+            input = tf.Print(input, [tf.reduce_mean(input)])
             tf.summary.image(
                 'post-%s' % self.name, tf.split(
                     input, num_or_size_splits=self.n_filters, axis=-1)[0])
@@ -364,15 +365,23 @@ class Model(Object):
         return result
 
     def predict(self):
+        import time
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
             predictions = []
+            i = 0
             for p in self.est.predict(
                     input_fn=self.generate_predict_dataset,
                     yield_single_examples=True):
-                print(p)
-
+                # print(p)
+                if not i:
+                    tstart = time.time()
+                    print('START')
+                i += 1
+            print('This took %1.1f seconds for %i predictions' %
+                    (time.time()-tstart, i))
+ 
     def evaluate(self):
         logger.debug('evaluation...')
         with self.sess as default:
