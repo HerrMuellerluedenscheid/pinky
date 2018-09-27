@@ -5,6 +5,7 @@ from .config import PinkyConfig
 from .optimize import Optimizer
 from . import plot
 
+import functools
 import tensorflow as tf
 import tempfile
 from pyrocko import guts
@@ -156,7 +157,7 @@ class Model(Object):
         optional=True, help='if set, shuffle examples at given buffer size.')
 
     tf.logging.set_verbosity(tf.logging.INFO)
-
+    force_dropout = Bool.T(optional=True)
     layers = List.T(Layer.T(), help='A list of `Layers` instances.')
 
     def __init__(self, tf_config=None, **kwargs):
@@ -221,9 +222,9 @@ class Model(Object):
         '''model directories.'''
         delete_if_exists(self.get_outdir())
 
-    def generate_eval_dataset(self):
+    def generate_eval_dataset(self, nrepeat=1):
         '''Generator of evaluation dataset.'''
-        return self.config.evaluation_data_generator.get_dataset().batch(
+        return self.config.evaluation_data_generator.get_dataset().repeat(nrepeat).batch(
                 self.batch_size)
 
     def generate_predict_dataset(self):
@@ -256,7 +257,8 @@ class Model(Object):
         input = tf.layers.batch_normalization(input, training=training)
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
-            input = layer.chain(input=input, training=training,
+            input = layer.chain(input=input,
+                    training=training or self.force_dropout,
                     dropout_rate=self.dropout_rate)
 
         # Final layer
@@ -382,6 +384,40 @@ class Model(Object):
             print('This took %1.1f seconds for %i predictions' %
                     (time.time()-tstart, i))
  
+    def evaluate_errors(self, n_predict=100):
+        logger.debug('evaluation...')
+        self.dropout_rate = 0.333
+        with self.sess as default:
+            self.est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.get_outdir())
+            labels = [l for _, l in self.config.evaluation_data_generator.generate()]
+            labels = self.denormalize_label(num.array(labels))
+
+            all_predictions = []
+
+            # repeating_eval = functools.partialmethod(self.generate_eval_dataset,
+            #         nrepeat=n_predict
+            for n in range(n_predict):
+                predictions = []
+                for p in self.est.predict(
+                        input_fn=self.generate_eval_dataset,
+                        yield_single_examples=True):
+
+                    predictions.append(p['predictions'])
+                predictions = self.denormalize_label(num.array(predictions))
+                all_predictions.append(predictions)
+
+                # activate dropout after first iteration. hence, first are
+                # 'correct locations'
+                self.force_dropout = True
+
+            all_predictions = num.array(all_predictions)
+
+            save_name = pjoin(self.get_plot_path(), 'errors')
+
+            plot.evaluate_errors(
+                    all_predictions, labels, name=save_name)
+
     def evaluate(self):
         logger.debug('evaluation...')
         with self.sess as default:

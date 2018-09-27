@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import glob
 
 from pyrocko import guts
 from .model import Model
@@ -19,6 +20,8 @@ def main():
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--evaluate', action='store_true',
             help='Predict from input of `evaluation_data_generator` in config.')
+    parser.add_argument('--evaluate-errors', action='store_true',
+            help='Predict errors input of `evaluation_data_generator` in config.')
     parser.add_argument('--predict', action='store_true',
             help='Predict from input of `predict_data_generator` in config.')
     parser.add_argument('--optimize', metavar='FILENAME',
@@ -30,8 +33,8 @@ def main():
     parser.add_argument('--new-config')
     parser.add_argument('--clear', help='delete remaints of former runs',
             action='store_true')
-    parser.add_argument('--show-data', type=int, default=9, nargs='?',
-        help='call with `--debug` to get plot figures with additional information.')
+    parser.add_argument('--show-data', type=int, metavar='N',
+        help='show N data examples. Call with `--debug` to get plot figures with additional information.')
     parser.add_argument('--nskip', type=int,
         help='For plotting. Examples to skip.')
     parser.add_argument('--ngpu', help='number of GPUs to use')
@@ -42,7 +45,7 @@ def main():
 
     args = parser.parse_args()
 
-    if (args.predict or args.evaluate) and args.clear:
+    if (args.predict or args.evaluate or args.evaluate_errors) and args.clear:
         sys.exit('\nCannot `--clear` when running `--predict` or `--evaluate`')
 
     if args.debug:
@@ -53,21 +56,13 @@ def main():
         logging.basicConfig(stream=sys.stdout, level=logging.INFO)
         logger.setLevel(logging.INFO)
 
-    # tf_config = tf.ConfigProto()
-    # tf_config.gpu_options.allow_growth = True
-    # if args.gpu_no:
-    #     tf_config.device_count = {'GPU': args.gpu_no}
-
     configs = []
     if args.config:
         configs = [args.config]
 
     if args.configs:
-        import glob
-        a = args.configs.split(',')
-        for ai in a:
+        for ai in args.configs.split(','):
             configs.extend(glob.glob(ai))
-        # configs.extend(args.configs.split(','))
 
     for iconfig, config in enumerate(configs):
         model = guts.load(filename=config)
@@ -81,12 +76,11 @@ def main():
 
         if args.clear:
             model.clear()
-        # model.set_tfconfig(tf_config)
-
         if args.show_data:
             from . import plot
             import matplotlib.pyplot as plt
             nskip = args.nskip or 0
+            print(args.show_data)
             plot.show_data(model, n=args.show_data, nskip=nskip, shuffle=False)
             plt.show()
 
@@ -157,6 +151,9 @@ def main():
                 # model.train()
         elif args.evaluate:
             model.evaluate()
+
+        elif args.evaluate_errors:
+            model.evaluate_errors()
 
         elif args.predict:
             model.predict()
