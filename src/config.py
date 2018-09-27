@@ -44,7 +44,7 @@ class PinkyConfig(Object):
     highpass_order = Int.T(default=4, optional=True)
     lowpass_order = Int.T(default=4, optional=True)
 
-    normalize_labels = Bool.T(default=False,
+    normalize_labels = Bool.T(default=True,
         help='Normalize labels by std')
 
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
