@@ -24,7 +24,7 @@ class PinkyConfig(Object):
         when using TFRecordData')
 
     data_generator = DataGeneratorBase.T()
-    evaluation_data_generator = DataGeneratorBase.T()
+    evaluation_data_generator = DataGeneratorBase.T(optional=True)
     prediction_data_generator = DataGeneratorBase.T(optional=True)
     normalization = Normalization.T(default=Normalization(), optional=True)
     imputation = Imputation.T(
@@ -57,14 +57,20 @@ class PinkyConfig(Object):
     def setup(self):
         self.data_generator.set_config(self)
         if self.normalize_labels:
+            # To not break the label normalization, the data_generator used
+            # for training is required in any case at the moment!
+            # Better store normalization data during training to recycle at
+            # prediction time.
             self.label_median = num.median(
                     num.array(list(
                         self.data_generator.iter_labels())), axis=0)
-            # CHANGE: use global normalization scale (mean)
+
             self.label_scale = num.mean(num.std(
                     num.array(list(
                         self.data_generator.iter_labels())), axis=0))
-        self.evaluation_data_generator.set_config(self)
+
+        if self.evaluation_data_generator:
+            self.evaluation_data_generator.set_config(self)
 
         if self.prediction_data_generator:
             self.prediction_data_generator.set_config(self)
@@ -75,16 +81,17 @@ class PinkyConfig(Object):
 
             self.data_generator = ChannelStackGenerator.from_generator(
                     generator=self.data_generator)
-            self.evaluation_data_generator = ChannelStackGenerator.from_generator(
+            if self.evaluation_data_generator:
+                self.evaluation_data_generator = ChannelStackGenerator.from_generator(
                     generator=self.evaluation_data_generator)
             if self.prediction_data_generator:
                 self.prediction_data_generator = ChannelStackGenerator.from_generator(
                     generator=self.prediction_data_generator)
 
-        self.data_generator.setup()
-        self.evaluation_data_generator.setup()
-        if self.prediction_data_generator:
-            self.prediction_data_generator.setup()
+        # self.data_generator.setup()
+        # self.evaluation_data_generator.setup()
+        # if self.prediction_data_generator:
+        #     self.prediction_data_generator.setup()
 
     def set_n_samples(self):
         '''Set number of sampes (n_samples) from first example of data

@@ -34,7 +34,7 @@ class Layer(Object):
         '''Subclass this method for plotting kernels.'''
         logger.debug('not implemented')
 
-    def chain(self, input, training=False, **kwargs):
+    def chain(self, input, levels, training=False, **kwargs):
         '''Subclass this method to attach the layer to a sequential model.'''
         pass
 
@@ -53,7 +53,9 @@ class CNNLayer(Layer):
     strides = Tuple.T(2, Int.T(), default=(1, 1))
     tf_fun = tf.layers.conv2d
 
-    def chain(self, input, training=False, dropout_rate=0.):
+    is_detector= Bool.T(default=False)
+
+    def chain(self, input, level, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
@@ -77,15 +79,21 @@ class CNNLayer(Layer):
             strides=(1, 1), name=self.name+'maxpool')
 
         if logger.getEffectiveLevel() == logging.DEBUG:
-            input = tf.Print(input, [tf.reduce_mean(input)])
             tf.summary.image(
                 'post-%s' % self.name, tf.split(
                     input, num_or_size_splits=self.n_filters, axis=-1)[0])
 
+        if self.is_detector:
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(input-
+                tf.reduce_mean(input))))
+
+            level = tf.assign_add(level, tf.reduce_max(input) / stddev)
+            input = tf.Print(input, [level], 'detector threshold: %s' % self.name)
+
         input = tf.layers.dropout(
             input, rate=dropout_rate, training=training)
 
-        return tf.layers.batch_normalization(input, training=training)
+        return tf.layers.batch_normalization(input, training=training), level
 
     def visualize_kernel(self, estimator, index=0, save_path=None, **kwargs):
         save_name = pjoin(save_path, 'kernel-%s' % self.name)
@@ -95,7 +103,7 @@ class CNNLayer(Layer):
 
 class SeparableCNNLayer(CNNLayer):
 
-    def chain(self, input, training=False, dropout_rate=0.):
+    def chain(self, input, level, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
@@ -121,15 +129,15 @@ class SeparableCNNLayer(CNNLayer):
         input = tf.layers.dropout(
             input, rate=dropout_rate, training=training)
 
-        return tf.layers.batch_normalization(input, training=training)
+        return tf.layers.batch_normalization(input, training=training), level
 
 
 class DenseLayer(Layer):
 
-    def chain(self, input, training=False, **kwargs):
+    def chain(self, input, level, training=False, **kwargs):
         input = tf.contrib.layers.flatten(input)
         return tf.layers.dense(input, self.n_filters, name=self.name,
-                activation=self.get_activation())
+                activation=self.get_activation()), level
 
     def visualize_kernel(self, estimator, index=0, save_path=None):
         save_name = pjoin(save_path, 'kernel-%s' % self.name)
@@ -227,6 +235,13 @@ class Model(Object):
         return self.config.evaluation_data_generator.get_dataset().repeat(nrepeat).batch(
                 self.batch_size)
 
+    def generate_detect_dataset(self):
+        '''Generator of prediction dataset.'''
+        d = self.config.prediction_data_generator
+        if not d:
+            raise Exception('\nNo prediction data generator defined in config!')
+        return d.get_chunked_dataset(tinc=1.)
+
     def generate_predict_dataset(self):
         '''Generator of prediction dataset.'''
         d = self.config.prediction_data_generator
@@ -255,9 +270,11 @@ class Model(Object):
                 features, [-1, *self.config.data_generator.tensor_shape,  1])
 
         input = tf.layers.batch_normalization(input, training=training)
+        level = tf.get_variable('levels', [self.batch_size])
+                
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
-            input = layer.chain(input=input,
+            input, level = layer.chain(input=input, level=level,
                     training=training or self.force_dropout,
                     dropout_rate=self.dropout_rate)
 
@@ -267,7 +284,7 @@ class Model(Object):
 
         if mode == tf.estimator.ModeKeys.PREDICT:
             return tf.estimator.EstimatorSpec(mode,
-                    predictions = {'predictions':predictions})
+                    predictions = {'predictions':predictions, 'levels': level})
 
         # do not denormalize loss
         loss = tf.losses.mean_squared_error(
@@ -383,7 +400,22 @@ class Model(Object):
                 i += 1
             print('This took %1.1f seconds for %i predictions' %
                     (time.time()-tstart, i))
- 
+
+    def detect(self):
+        with self.sess as default:
+            self.est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.get_outdir())
+            detections = []
+            i = 0
+
+            # 1 second
+            for p in self.est.predict(
+                    input_fn=self.generate_detect_dataset,
+                    # yield_single_examples=False):
+                    yield_single_examples=True):
+                print(p)
+                pass
+
     def evaluate_errors(self, n_predict=100):
         logger.debug('evaluation...')
         self.dropout_rate = 0.333

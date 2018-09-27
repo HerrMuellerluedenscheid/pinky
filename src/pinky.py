@@ -24,6 +24,8 @@ def main():
             help='Predict errors input of `evaluation_data_generator` in config.')
     parser.add_argument('--predict', action='store_true',
             help='Predict from input of `predict_data_generator` in config.')
+    parser.add_argument('--detect', action='store_true',
+            help='Detect earthquakes')
     parser.add_argument('--optimize', metavar='FILENAME',
             help='use optimizer defined in FILENAME')
     parser.add_argument('--write-tfrecord', metavar='FILENAME',
@@ -76,6 +78,7 @@ def main():
 
         if args.clear:
             model.clear()
+
         if args.show_data:
             from . import plot
             import matplotlib.pyplot as plt
@@ -157,6 +160,9 @@ def main():
 
         elif args.predict:
             model.predict()
+
+        elif args.detect:
+            model.detect()
 
         elif args.optimize:
             hyper_optimizer = guts.load(filename=args.optimize)

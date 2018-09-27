@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 from pyrocko.io import save, load
-from pyrocko.model import load_stations, load_events
+from pyrocko.model import load_stations, load_events, Event
 from pyrocko import guts
 from pyrocko.guts import Object, String, Int, Float, Tuple, Bool, Dict, List
 from pyrocko.gui import marker
@@ -11,7 +11,7 @@ from pyrocko import orthodrome
 from pyrocko import pile
 
 from collections import defaultdict, OrderedDict
-from functools import lru_cache
+from functools import lru_cache, partialmethod, partial
 from pyrocko import util
 
 import logging
@@ -28,6 +28,7 @@ from .util import delete_if_exists, first_element, filter_oob, ensure_list
 
 pjoin = os.path.join
 EPSILON = 1E-9
+UNLABELED = (-999., -999., -999.)
 
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ class DataGeneratorBase(Object):
         help='Rate by which to mask all channels of station')
 
     nmax = Int.T(optional=True)
+    labeled = Bool.T(default=True)
 
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop('config', None)
@@ -173,7 +175,10 @@ class DataGeneratorBase(Object):
         self.n_classes = 3
 
     def normalize_label(self, label):
-        return self.config.normalize_label(label)
+        if self.labeled:
+            return self.config.normalize_label(label)
+        else:
+            return label
 
     def set_config(self, pinky_config):
         self.config = pinky_config
@@ -251,6 +256,10 @@ class DataGeneratorBase(Object):
             label = num.fromstring(label, dtype=num.float32)
             yield chunk, label
 
+    def iter_chunked(self, tinc):
+        # if data has been written to tf records:
+        return self.iter_examples_and_labels()
+
     def iter_examples_and_labels(self):
         '''Subclass this method!
 
@@ -268,21 +277,28 @@ class DataGeneratorBase(Object):
 
             yield chunk, label
 
+    def generate_chunked(self, tinc=1):
+        '''Takes the output of `iter_examples_and_labels` and applies post
+        processing (see: `process_chunk`).
+        '''
+        for iexample, (chunk, label) in enumerate(
+                self.iter_chunked(tinc)):
+
+            yield self.process_chunk(chunk), self.normalize_label(label)
+
     def generate(self):
         '''Takes the output of `iter_examples_and_labels` and applies post
         processing (see: `process_chunk`).
         '''
         for iexample, (chunk, label) in enumerate(
                 self.iter_examples_and_labels()):
-            # print(iexample)
-            # if self.nmax and iexample >= self.nmax:
-            #     raise StopIteration('reached maximum number of requested examples')
 
             yield self.process_chunk(chunk), self.normalize_label(label)
 
     def extract_labels(self):
         '''Overwrite this method!'''
-        ...
+        if not self.labeled:
+            return UNLABELED
 
     def iter_labels(self):
         '''Iterate through labels.'''
@@ -296,6 +312,14 @@ class DataGeneratorBase(Object):
     def get_dataset(self):
         return tf.data.Dataset.from_generator(
             self.generate,
+            self.generate_output_types,
+            output_shapes=self.output_shapes)
+
+    def get_chunked_dataset(self, tinc=1.):
+        # gen = partialmethod(self.generate_chunked, tinc=tinc)
+        gen = partial(self.generate_chunked, tinc=tinc)
+        return tf.data.Dataset.from_generator(
+            gen,
             self.generate_output_types,
             output_shapes=self.output_shapes)
 
@@ -395,6 +419,19 @@ class ChannelStackGenerator(DataGeneratorBase):
         '''
         return (self.tensor_shape, self.n_classes)
 
+    def iter_chunked(self, tinc):
+        d = self.nslc_to_index
+        for feature, label in self.in_generator.iter_chunked(tinc=tinc):
+            chunk = self.get_raw_data_chunk(shape=self.tensor_shape)
+            for nsl, indices in self.nsl_to_indices_orig.items():
+                chunk[d[nsl]] = num.sum(num.abs(feature[indices, :]), axis=0)
+
+            if all_NAN(chunk):
+                logger.debug('all NAN. skipping...')
+                continue
+
+            yield chunk, label
+
     def iter_examples_and_labels(self):
         d = self.nslc_to_index
         for feature, label in self.in_generator.iter_examples_and_labels():
@@ -410,7 +447,9 @@ class ChannelStackGenerator(DataGeneratorBase):
 
     @classmethod
     def from_generator(cls, generator):
-        return cls(in_generator=generator, config=generator.config)
+        x = cls(in_generator=generator, config=generator.config)
+        x.setup()
+        return x
 
     def iter_labels(self):
         return self.in_generator.iter_labels()
@@ -462,6 +501,9 @@ class DataGenerator(DataGeneratorBase):
         return fn
 
     def extract_labels(self, source):
+        if not self.labeled:
+            return UNLABELED
+
         n, e = orthodrome.latlon_to_ne(
             self.config.reference_target.lat, self.config.reference_target.lon,
             source.lat, source.lon)
@@ -546,13 +588,18 @@ class PileData(DataGenerator):
             if m.get_phasename().upper() != self.align_phase:
                 continue
 
-            key = m.one_nslc()[:3]
-            markers_by_nsl.setdefault(key, []).append(m)
+            markers_by_nsl.setdefault(m.one_nslc()[:3], []).append(m)
 
         assert(len(markers_by_nsl) == 1)
 
         # filter markers that do not have an event assigned:
         self.markers = list(markers_by_nsl.values())[0]
+
+        if not self.labeled:
+            dummy_event = Event(lat=0., lon=0., depth=0.)
+            for m in self.markers:
+                if not m.get_event():
+                    m.set_event(dummy_event)
 
         self.markers = [m for m in self.markers if m.get_event() is not None]
 
@@ -568,11 +615,44 @@ class PileData(DataGenerator):
                 'Different sampling rates in dataset. Preprocessing slow')
 
     def extract_labels(self, marker):
+        if not self.labeled:
+            return UNLABELED
+
         source = marker.get_event()
         n, e = orthodrome.latlon_to_ne(
             self.config.reference_target.lat, self.config.reference_target.lon,
             source.lat, source.lon)
         return (n, e, source.depth)
+
+    def iter_chunked(self, tinc):
+        tr_len = self.n_samples * self.deltat_want
+        nslc_to_index = self.nslc_to_index
+
+        tpad = self.config.tpad
+        if self.config.highpass is not None:
+            tpad += 0.5 / self.config.highpass
+
+        logger.debug('START')
+        
+        for tmin in num.arange(self.data_pile.tmin, self.data_pile.tmax, tinc):
+            for trs in self.data_pile.chopper(
+                    tmin=tmin-tpad, tmax=tmin+tr_len+tpad,
+                    keep_current_files_open=True,
+                    want_incomplete=False,
+                    trace_selector=self.reject_blacklisted):
+
+                for tr in trs:
+                    self.preprocess(tr)
+
+                indices = [nslc_to_index[tr.nslc_id] for tr in trs]
+                chunk = self.get_raw_data_chunk(self.tensor_shape)
+                self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=tmin)
+
+                if all_NAN(chunk):
+                    logger.debug('all NAN. skipping...')
+                    continue
+
+                yield chunk, UNLABELED
 
     def iter_labels(self):
         for m in self.markers:
@@ -607,7 +687,6 @@ class PileData(DataGenerator):
                     continue
 
                 label = self.extract_labels(m)
-
                 yield chunk, label
 
 
@@ -681,6 +760,8 @@ class SeismosizerData(DataGenerator):
         return targets
 
     def extract_labels(self, source):
+        if not self.labeled:
+            return UNLABELED
         return (source.north_shift, source.east_shift, source.depth)
 
     def iter_examples_and_labels(self):
