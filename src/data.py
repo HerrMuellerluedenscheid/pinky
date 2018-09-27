@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 from pyrocko.io import save, load
-from pyrocko.model import load_stations
+from pyrocko.model import load_stations, load_events
 from pyrocko import guts
 from pyrocko.guts import Object, String, Int, Float, Tuple, Bool, Dict, List
 from pyrocko.gui import marker
@@ -165,6 +165,8 @@ class DataGeneratorBase(Object):
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
 
+    nmax = Int.T(optional=True)
+
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
@@ -270,7 +272,12 @@ class DataGeneratorBase(Object):
         '''Takes the output of `iter_examples_and_labels` and applies post
         processing (see: `process_chunk`).
         '''
-        for chunk, label in self.iter_examples_and_labels():
+        for iexample, (chunk, label) in enumerate(
+                self.iter_examples_and_labels()):
+            # print(iexample)
+            # if self.nmax and iexample >= self.nmax:
+            #     raise StopIteration('reached maximum number of requested examples')
+
             yield self.process_chunk(chunk), self.normalize_label(label)
 
     def extract_labels(self):
@@ -497,9 +504,11 @@ class PileData(DataGenerator):
     data_paths = List.T(String.T())
     data_format = String.T(default='detect')
     fn_markers = String.T()
+    fn_events = String.T(optional=True)
     sort_markers = Bool.T(default=False,
             help= 'Sorting markers speeds up data io. Shuffled markers \
             improve generalization')
+    align_phase = String.T(default='P')
 
     def setup(self):
         self.data_pile = pile.make_pile(
@@ -514,29 +523,41 @@ class PileData(DataGenerator):
         self.n_samples = int(
                 (self.config.sample_length + self.config.tpad) / self.deltat_want)
 
-        logger.debug('loading markers')
+        logger.debug('loading marker file %s' % self.fn_markers)
+
+        # loads just plain markers:
         markers = marker.load_markers(self.fn_markers)
+
+        if self.fn_events:
+            markers.extend(
+                    [marker.EventMarker(e) for e in
+                load_events(self.fn_events)])
 
         if self.sort_markers:
             logger.info('sorting markers!')
             markers.sort(key=lambda x: x.tmin)
-
         marker.associate_phases_to_events(markers)
 
         markers_by_nsl = {}
         for m in markers:
             if not m.match_nsl(self.config.reference_target.codes[:3]):
                 continue
+
+            if m.get_phasename().upper() != self.align_phase:
+                continue
+
             key = m.one_nslc()[:3]
-            _ms = markers_by_nsl.get(key, [])
-            _ms.append(m)
-            markers_by_nsl[key] = _ms
- 
+            markers_by_nsl.setdefault(key, []).append(m)
+
         assert(len(markers_by_nsl) == 1)
 
         # filter markers that do not have an event assigned:
         self.markers = list(markers_by_nsl.values())[0]
+
         self.markers = [m for m in self.markers if m.get_event() is not None]
+
+        if not len(self.markers):
+            raise Exception('No markers left in dataset')
 
         self.config.channels = list(self.data_pile.nslc_ids.keys())
         self.config.channels.sort()
