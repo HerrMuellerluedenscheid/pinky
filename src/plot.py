@@ -309,6 +309,14 @@ def mislocation_hist(predictions, labels, name=None):
 
     save_figure(fig, name)
 
+    n = len(errors_abs)
+
+    e100 = len(num.where(errors_abs<100.)[0])/n
+    e200 = len(num.where(errors_abs<200.)[0])/n
+
+    print('Fraction of solutions with error < 100.', e100)
+    print('Fraction of solutions with error < 200.', e200)
+
 
 def error_map(prediction, label, ax):
     px, py = prediction
@@ -487,3 +495,56 @@ def plot_predictions_and_labels_automatic(predictions, labels, name=None):
     error_contourf(predictions, labels, bottom_right)
     save_figure(fig, name)
 
+
+def evaluate_errors(all_predictions, labels, name=None):
+    '''
+    first set of predictions in `all_predictions` is expected to be the
+    predictions of the network.
+    '''
+    errors_true = num.sqrt(num.sum((all_predictions[0]-labels)**2, axis=1))
+    errors_from_prediction = num.sqrt(num.sum((all_predictions[1:]-all_predictions[0])**2,
+        axis=2))
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    max_error = num.max(errors_true)
+    max_error_prediction = num.max(errors_from_prediction)
+    # errors_true /= max_error
+    # errors_from_prediction /= max_error
+    std_error = num.std(errors_from_prediction, axis=0)
+    ax.scatter(errors_true, std_error, alpha=0.9,
+            s=POINT_SIZE)
+    ax.set_xlabel('deviation from catalog [m]')
+    ax.set_ylabel('$\mu(X_i)$')
+    save_figure(fig, name)
+
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    ax.scatter(errors_true, std_error, alpha=0.9,
+            s=POINT_SIZE)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('deviation from catalog [m]')
+    ax.set_ylabel('$\mu(X_i)$')
+    save_figure(fig, name+'_log')
+
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    ax.scatter(errors_true, std_error, alpha=0.9,
+            s=POINT_SIZE)
+    ax.set_xscale('log')
+    ax.set_xlabel('deviation from catalog [m]')
+    ax.set_ylabel('$\mu(X_i)$')
+    save_figure(fig, name+'_semi_log')
+
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    ax.scatter(errors_true/max_error, std_error/num.max(std_error), alpha=0.9,
+            s=POINT_SIZE)
+    # ax.set_ylim((1E-2, 0))
+    # ax.set_xlim((1E-2, 0))
+    ax.set_aspect('equal')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('deviation from catalog [m]')
+    ax.set_ylabel('$\mu(X_i)$')
+    save_figure(fig, name+'_loglog_norm')
