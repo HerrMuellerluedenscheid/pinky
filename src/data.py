@@ -28,7 +28,7 @@ from .util import delete_if_exists, first_element, filter_oob, ensure_list
 
 pjoin = os.path.join
 EPSILON = 1E-9
-UNLABELED = (-999., -999., -999.)
+UNLABELED = (-9E9, -9E9, -9E9)
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,14 @@ class NormalizeLog(Normalization):
         # chunk /= num.nanmax(chunk)
         # chunk *= sign
         # chunk += mean
+
+
+
+
+class NormalizeFixScale(Normalization):
+    factor = Float.T()
+    def __call__(self, chunk):
+        chunk[:] /= self.factor
 
 
 class NormalizeNthRoot(Normalization):
@@ -255,6 +263,10 @@ class DataGeneratorBase(Object):
 
             label = num.fromstring(label, dtype=num.float32)
             yield chunk, label
+
+    @property
+    def tstart_data(self):
+        return None
 
     def iter_chunked(self, tinc):
         # if data has been written to tf records:
@@ -453,7 +465,10 @@ class ChannelStackGenerator(DataGeneratorBase):
 
     def iter_labels(self):
         return self.in_generator.iter_labels()
-
+    
+    @property
+    def tstart_data(self):
+        return self.in_generator.tstart_data
 
 class DataGenerator(DataGeneratorBase):
 
@@ -552,6 +567,9 @@ class PileData(DataGenerator):
             improve generalization')
     align_phase = String.T(default='P')
 
+    tstart = String.T(optional=True)
+    tstop = String.T(optional=True)
+
     def setup(self):
         self.data_pile = pile.make_pile(
             self.data_paths, fileformat=self.data_format)
@@ -624,6 +642,11 @@ class PileData(DataGenerator):
             source.lat, source.lon)
         return (n, e, source.depth)
 
+    @property
+    def tstart_data(self):
+        '''Returns start point of data returned by generator.'''
+        return util.stt(self.tstart) if self.tstart else self.data_pile.tmin
+
     def iter_chunked(self, tinc):
         tr_len = self.n_samples * self.deltat_want
         nslc_to_index = self.nslc_to_index
@@ -632,27 +655,33 @@ class PileData(DataGenerator):
         if self.config.highpass is not None:
             tpad += 0.5 / self.config.highpass
 
+        tstart = util.stt(self.tstart) if self.tstart else None
+        tstop = util.stt(self.tstop) if self.tstop else None
+
         logger.debug('START')
-        
-        for tmin in num.arange(self.data_pile.tmin, self.data_pile.tmax, tinc):
-            for trs in self.data_pile.chopper(
-                    tmin=tmin-tpad, tmax=tmin+tr_len+tpad,
-                    keep_current_files_open=True,
-                    want_incomplete=False,
-                    trace_selector=self.reject_blacklisted):
+        for trs in self.data_pile.chopper(
+                tinc=tinc, tmin=tstart, tmax=tstop, tpad=tpad,
+                keep_current_files_open=True, want_incomplete=False,
+                trace_selector=self.reject_blacklisted):
 
-                for tr in trs:
-                    self.preprocess(tr)
+            chunk = self.get_raw_data_chunk(self.tensor_shape)
 
-                indices = [nslc_to_index[tr.nslc_id] for tr in trs]
-                chunk = self.get_raw_data_chunk(self.tensor_shape)
-                self.fit_data_into_chunk(trs, chunk=chunk, indices=indices, tref=tmin)
-
-                if all_NAN(chunk):
-                    logger.debug('all NAN. skipping...')
-                    continue
-
+            if not trs:
                 yield chunk, UNLABELED
+                continue
+
+            for tr in trs:
+                self.preprocess(tr)
+
+            indices = [nslc_to_index[tr.nslc_id] for tr in trs]
+            self.fit_data_into_chunk(trs, chunk=chunk, indices=indices,
+                    tref=trs[0].tmin)
+
+            if all_NAN(chunk):
+                logger.debug('all NAN. skipping...')
+                continue
+
+            yield chunk, UNLABELED
 
     def iter_labels(self):
         for m in self.markers:
