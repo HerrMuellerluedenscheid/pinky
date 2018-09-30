@@ -8,8 +8,11 @@ from . import plot
 import functools
 import tensorflow as tf
 import tempfile
-from pyrocko import guts
+from pyrocko import guts, util as putil, io
+from pyrocko import trace
 from pyrocko.guts import Object, Float, Bool
+from pyrocko.gui.marker import Marker, EventMarker
+import pyrocko.model as pmodel
 
 import logging
 import shutil
@@ -65,6 +68,8 @@ class CNNLayer(Layer):
         if self.dilation_rate:
             kwargs.update({'dilation_rate': self.dilation_rate})
 
+        inpower = tf.sqrt(tf.reduce_sum(tf.square(input)))
+
         input = tf.layers.conv2d(
             inputs=input,
             filters=self.n_filters,
@@ -84,11 +89,13 @@ class CNNLayer(Layer):
                     input, num_or_size_splits=self.n_filters, axis=-1)[0])
 
         if self.is_detector:
-            stddev = tf.sqrt(tf.reduce_mean(tf.square(input-
-                tf.reduce_mean(input))))
+            batch_mean = tf.reduce_mean(input, reduction_indices=(1, 2, 3),
+                    keepdims=True)
 
-            level = tf.assign_add(level, tf.reduce_max(input) / stddev)
-            input = tf.Print(input, [level], 'detector threshold: %s' % self.name)
+            stdev = tf.sqrt(tf.reduce_mean(tf.square(input - batch_mean),
+                    reduction_indices=(1, 2, 3)))
+
+            level += (tf.sqrt(tf.reduce_sum(tf.square(input))) / inpower)
 
         input = tf.layers.dropout(
             input, rate=dropout_rate, training=training)
@@ -180,6 +187,7 @@ class Model(Object):
         self.debug = logger.getEffectiveLevel() == logging.DEBUG
         self.est = None
         self.prefix = None
+        self.tinc_detect = 1.
 
     def set_tfconfig(self, tf_config):
         self.sess.close()
@@ -223,7 +231,8 @@ class Model(Object):
         delete_if_exists(self.get_summary_outdir())
         self.clear_model()
 
-    def denormalize_label(self, items):
+    def denormalize_location(self, items):
+        '''Convert normalized carthesian location to true location.'''
         return self.config.denormalize_label(items)
 
     def clear_model(self):
@@ -240,14 +249,14 @@ class Model(Object):
         d = self.config.prediction_data_generator
         if not d:
             raise Exception('\nNo prediction data generator defined in config!')
-        return d.get_chunked_dataset(tinc=1.)
+        return d.get_chunked_dataset(tinc=self.tinc_detect).prefetch(100)
 
     def generate_predict_dataset(self):
         '''Generator of prediction dataset.'''
         d = self.config.prediction_data_generator
         if not d:
             raise Exception('\nNo prediction data generator defined in config!')
-        return d.get_dataset()
+        return d.get_dataset().batch(self.batch_size)
 
     def generate_dataset(self):
         '''Generator of training dataset.'''
@@ -270,7 +279,7 @@ class Model(Object):
                 features, [-1, *self.config.data_generator.tensor_shape,  1])
 
         input = tf.layers.batch_normalization(input, training=training)
-        level = tf.get_variable('levels', [self.batch_size])
+        level = tf.zeros([1], name='level')
                 
         for layer in self.layers:
             logger.debug('chain in layer: %s' % layer)
@@ -284,18 +293,16 @@ class Model(Object):
 
         if mode == tf.estimator.ModeKeys.PREDICT:
             return tf.estimator.EstimatorSpec(mode,
-                    predictions = {'predictions':predictions, 'levels': level})
+                    predictions = {
+                        'predictions': self.denormalize_location(predictions),
+                        'level': level})
 
-        # do not denormalize loss
-        loss = tf.losses.mean_squared_error(
-            labels, predictions
-        )
+        # do not denormalize labels and predictions for loss
+        loss = tf.losses.mean_squared_error(labels, predictions)
 
         # transform to carthesian coordiantes
-        labels = self.denormalize_label(labels)
-        predictions = self.denormalize_label(predictions)
-        labels = tf.Print(labels, [labels[:10]], 'labels')
-        predictions = tf.Print(predictions, [predictions[:10]], 'predictions')
+        labels = self.denormalize_location(labels)
+        predictions = self.denormalize_location(predictions)
 
         predictions = tf.transpose(predictions) 
         labels = tf.transpose(labels)
@@ -356,12 +363,6 @@ class Model(Object):
             output_dir=pjoin(self.get_summary_outdir(), subdir),
             scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()))
 
-    def build_graph(self):
-        with self.sess as default:
-            _ = tf.estimator.Estimator(
-                    model_fn=self.model, model_dir=self.get_outdir())
-            print(_)
-
     def train_and_evaluate(self):
         self.save_model_in_summary()
         with self.sess as default:
@@ -384,37 +385,68 @@ class Model(Object):
         return result
 
     def predict(self):
+        '''Predict locations prediction data generator and store results
+        as a list of carthesian coordinates.'''
         import time
+        import csv
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
             predictions = []
-            i = 0
-            for p in self.est.predict(
+            for i, p in enumerate(self.est.predict(
                     input_fn=self.generate_predict_dataset,
-                    yield_single_examples=True):
-                # print(p)
+                    yield_single_examples=False)):
+
                 if not i:
                     tstart = time.time()
-                    print('START')
-                i += 1
-            print('This took %1.1f seconds for %i predictions' %
-                    (time.time()-tstart, i))
 
-    def detect(self):
+                predictions.extend(p['predictions'])
+
+        fn_out = 'predictions.csv'
+        with open(fn_out, 'w') as f:
+            w = csv.writer(f, delimiter=' ')
+            for p in predictions:
+                w.writerow(p)
+
+        logger.info('This took %1.1f seconds ' % (time.time()-tstart))
+        logger.info('Saved locations in %s' % fn_out)
+
+    def detect(self, tinc=None):
+        tpeaksearch = 5.
+        detector_threshold = 1.8
+        self.tinc_detect = tinc or 1.0
+        fn_detector_trace = 'detector.mseed'
+        fn_detections = 'detections.pf'
+
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
-            detections = []
-            i = 0
+            detector_level = []
 
-            # 1 second
-            for p in self.est.predict(
+            for ip, p in enumerate(self.est.predict(
                     input_fn=self.generate_detect_dataset,
-                    # yield_single_examples=False):
-                    yield_single_examples=True):
-                print(p)
-                pass
+                    yield_single_examples=True)):
+                detector_level.append(p['level'])
+
+            tr = trace.Trace(
+                    tmin=self.config.prediction_data_generator.tstart_data,
+                    ydata=num.array(detector_level),
+                    deltat=self.tinc_detect)
+
+            tpeaks, apeaks = tr.peaks(detector_threshold, tpeaksearch)
+            logger.info('Fount %i detections' % len(tpeaks))
+
+            markers = []
+            for (tpeak, apeak) in zip(tpeaks, apeaks):
+                markers.append(
+                        EventMarker(pmodel.Event(time=tpeak,
+                    name=str(apeak))))
+
+            logger.info('Saving detections: %s' % fn_detections)
+            Marker.save_markers(markers, fn_detections)
+
+            logger.info('Saving detector level: %s' % fn_detector_trace)
+            io.save([tr], fn_detector_trace)
 
     def evaluate_errors(self, n_predict=100):
         logger.debug('evaluation...')
@@ -423,7 +455,7 @@ class Model(Object):
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
             labels = [l for _, l in self.config.evaluation_data_generator.generate()]
-            labels = self.denormalize_label(num.array(labels))
+            labels = self.denormalize_location(num.array(labels))
 
             all_predictions = []
 
@@ -436,7 +468,7 @@ class Model(Object):
                         yield_single_examples=True):
 
                     predictions.append(p['predictions'])
-                predictions = self.denormalize_label(num.array(predictions))
+                # predictions = self.denormalize_location(num.array(predictions))
                 all_predictions.append(predictions)
 
                 # activate dropout after first iteration. hence, first are
@@ -464,8 +496,8 @@ class Model(Object):
                 predictions.append(p['predictions'])
 
             save_name = pjoin(self.get_plot_path(), 'mislocation')
-            predictions = self.denormalize_label(num.array(predictions))
-            labels = self.denormalize_label(num.array(labels))
+            # predictions = self.denormalize_location(num.array(predictions))
+            labels = self.denormalize_location(num.array(labels))
 
             plot.plot_predictions_and_labels(
                     predictions, labels, name=save_name)
