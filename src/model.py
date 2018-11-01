@@ -491,12 +491,12 @@ class Model(Object):
             predictions = []
             for p in self.est.predict(
                     input_fn=self.generate_eval_dataset,
-                    yield_single_examples=True):
+                    yield_single_examples=False):
 
-                predictions.append(p['predictions'])
+                predictions.extend(p['predictions'])
 
             save_name = pjoin(self.get_plot_path(), 'mislocation')
-            # predictions = self.denormalize_location(num.array(predictions))
+            predictions = num.array(predictions)
             labels = self.denormalize_location(num.array(labels))
 
             plot.plot_predictions_and_labels(

@@ -318,15 +318,17 @@ def mislocation_hist(predictions, labels, name=None):
     print('Fraction of solutions with error < 200.', e200)
 
 
-def error_map(prediction, label, ax):
+def error_map(prediction, label, ax, legend=None):
     px, py = prediction
     lx, ly = label
 
-    ax.plot((px, lx), (py, ly), color='grey', alpha=0.5, linewidth=0.1)
+    ax.plot((px, lx), (py, ly), color='grey', alpha=0.8, linewidth=0.1)
     # ax.arrow(px, lx, px-py, lx-ly, color='grey', alpha=0.5)
 
-    ax.scatter(px, py, color='red', s=POINT_SIZE, linewidth=0)
-    ax.scatter(lx, ly, color='blue', s=POINT_SIZE, linewidth=0)
+    l1, l2 = legend or (None, None)
+    ax.scatter(px, py, color='red', s=POINT_SIZE*1.5, linewidth=POINT_SIZE/3,
+            marker='+', label=l1)
+    ax.scatter(lx, ly, color='blue', s=POINT_SIZE, linewidth=0, label=l2)
 
 
 def error_contourf(predictions, labels, ax):
@@ -427,11 +429,12 @@ def plot_predictions_and_labels(predictions, labels, name=None):
     bottom_left.set_xlim((-0.5, 0.5))
     bottom_left.invert_yaxis()
 
-    error_map((px, pz), (lx, lz), bottom_right)
+    error_map((px, pz), (lx, lz), bottom_right, legend=('pred.', 'ref.'))
     bottom_right.set_xlabel('N-S (rot.) [km]')
     bottom_right.set_ylabel('Depth [km]')
     bottom_right.invert_yaxis()
 
+    plt.legend(prop={'size': MAIN_FONT_SIZE-1})
     error_contourf(predictions, labels, top_right)
     top_right.set_ylabel('Depth [km]')
     top_right.set_xlabel('N-S (rot.) [km]')
