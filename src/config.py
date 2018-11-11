@@ -30,12 +30,12 @@ class PinkyConfig(Object):
     imputation = Imputation.T(
         optional=True, help='How to mask and fill gaps')
     
-    _n_samples = Int.T(optional=True)
     reference_target = Target.T(optional=True)
 
     n_classes = Int.T(default=3)
     _channels =  List.T(
             Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
+    _n_samples = Int.T(optional=True, help='(Don\'t modify)')
 
     # Not implemented for DataGeneratorBase
     highpass = Float.T(optional=True, help='highpass filter corner frequency')
@@ -48,13 +48,21 @@ class PinkyConfig(Object):
         help='Normalize labels by std')
 
     absolute = Bool.T(help='Use absolute amplitudes', default=False)
-    tpad = Float.T(default=0.,
-            help='padding between p phase onset and data chunk start')
+
+    tpad = Float.T(
+        default=0.,
+        help='padding between p phase onset and data chunk start')
+
+    t_translation_max = Float.T(default=0.,
+        help='Augment data by uniformly shifting examples in time limited by '
+        'this parameters. This will increase *tpad*')
+
     deltat_want = Float.T(optional=True)
     label_scale = num.ones(3, dtype=num.float32)
     label_median = num.ones(3, dtype=num.float32)
 
     def setup(self):
+
         self.data_generator.set_config(self)
         if self.normalize_labels:
             # To not break the label normalization, the data_generator used
@@ -100,6 +108,21 @@ class PinkyConfig(Object):
         example, _ = next(self.data_generator.generate())
         self._n_samples = example.shape[1]
         assert(example.shape == self.tensor_shape)
+
+    @property
+    def effective_deltat(self):
+        if self.deltat_want is None:
+            return (self.sample_length + self.tpad) / self._n_samples
+        else:
+            return self.deltat_want
+
+    @property
+    def effective_tpad(self):
+        tpad = self.tpad + self.t_translation_max
+        if self.highpass is not None:
+            tpad += 0.5 / self.highpass
+
+        return tpad
 
     def normalize_label(self, label):
         '''label has to be a numpy array'''
