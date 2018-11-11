@@ -22,6 +22,7 @@ NPOINTS = 200
 
 logger.debug('setting figsize to: %s x %s' % (FIG_SIZE))
 
+
 def save_figure(fig, name=None):
     '''Saves figure `fig` if `name` is defined. Closes the figure after
     saving.'''
@@ -318,17 +319,26 @@ def mislocation_hist(predictions, labels, name=None):
     print('Fraction of solutions with error < 200.', e200)
 
 
-def error_map(prediction, label, ax, legend=None):
+def error_map(prediction, label, ax, legend=None, text_labels=None):
+    '''
+    :param text_labels: list of prediction identifiers
+    '''
     px, py = prediction
     lx, ly = label
 
-    ax.plot((px, lx), (py, ly), color='grey', alpha=0.8, linewidth=0.1)
-    # ax.arrow(px, lx, px-py, lx-ly, color='grey', alpha=0.5)
+    ax.plot((px, lx), (py, ly), color='grey', alpha=0.8, linewidth=0.1, zorder=0)
 
     l1, l2 = legend or (None, None)
-    ax.scatter(px, py, color='red', s=POINT_SIZE*1.5, linewidth=POINT_SIZE/3,
-            marker='+', label=l1)
-    ax.scatter(lx, ly, color='blue', s=POINT_SIZE, linewidth=0, label=l2)
+    ax.scatter(lx, ly, color='yellow', s=POINT_SIZE*2., linewidth=0.1, label=l2,
+            edgecolors='grey', zorder=5)
+
+    ax.scatter(px, py, color='blue', s=POINT_SIZE*3, linewidth=POINT_SIZE/2,
+            marker='x', label=l1, zorder=10)
+
+    if text_labels:
+        assert len(text_labels) == len(lx)
+        for a in zip(lx, ly, text_labels):
+            ax.text(*a, fontsize=POINT_SIZE)
 
 
 def error_contourf(predictions, labels, ax):
@@ -337,11 +347,15 @@ def error_contourf(predictions, labels, ax):
     med = num.median(errors)
     vmin = 0.
     vmax = med + 1.5 * num.std(errors)
-    s = ax.scatter(predictions.T[0], predictions.T[2], s=6, c=errors, linewidth=0,
-            vmin=vmin, vmax=vmax)
+
+    s = ax.scatter(predictions.T[0], predictions.T[2], s=8, c=errors,
+            linewidth=0.1,
+            edgecolors='grey',
+            vmin=vmin, vmax=vmax, cmap='viridis_r')
+
     ax.set_xlabel('N-S')
     ax.set_ylabel('Z')
-    # colorbar
+
     cax = inset_axes(ax,
 		     width="2%",  # width = 10% of parent_bbox width
 		     height="50%",  # height : 50%
@@ -350,7 +364,7 @@ def error_contourf(predictions, labels, ax):
 		     bbox_transform=ax.transAxes,
 		     borderpad=0,
 		     )
-    cbar = colorbar(s, cax=cax)
+    cbar = colorbar(s, cax=cax, )
     cbar.ax.tick_params(labelsize=MAIN_FONT_SIZE-2)
 
 
@@ -368,11 +382,17 @@ def add_char_labels(axes, chars='abcdefghijklmnopqstuvwxyz'):
             horizontalalignment='right', verticalalignment='bottom')
 
 
-def plot_predictions_and_labels(predictions, labels, name=None):
+def plot_predictions_and_labels(
+        predictions, labels, name=None, text_labels=None):
+
+    predictions_all = predictions
+    labels_all = labels
 
     if NPOINTS:
         predictions = predictions[: NPOINTS]
         labels = labels[: NPOINTS]
+        if text_labels:
+            text_labels = text_labels[: NPOINTS]
         logger.warn('limiting number of points in scatter plot to %s' % NPOINTS)
 
     predictions /= 1000.
@@ -408,7 +428,7 @@ def plot_predictions_and_labels(predictions, labels, name=None):
     px, py, pz = predictions.T
     lx, ly, lz = labels.T
 
-    error_map((py, px), (ly, lx),  top_left)
+    error_map((py, px), (ly, lx),  top_left, text_labels=text_labels)
     top_left.set_ylabel('N-S [km]')
     top_left.set_xlabel('E-W [km]')
     top_left.set_aspect('equal')
@@ -422,20 +442,24 @@ def plot_predictions_and_labels(predictions, labels, name=None):
     lx, ly, lz = labels.T
 
     eshift = 0.5
-    error_map((py+eshift, pz), (ly+eshift, lz), bottom_left)
+    error_map((py+eshift, pz), (ly+eshift, lz), bottom_left,
+            text_labels=text_labels)
+
     bottom_left.set_xlabel('E-W (rot.) [km]')
     bottom_left.set_ylabel('Depth [km]')
     bottom_left.set_aspect('equal')
     bottom_left.set_xlim((-0.5, 0.5))
     bottom_left.invert_yaxis()
 
-    error_map((px, pz), (lx, lz), bottom_right, legend=('pred.', 'ref.'))
+    error_map((px, pz), (lx, lz), bottom_right, legend=('pred.', 'ref.'),
+            text_labels=text_labels)
+
     bottom_right.set_xlabel('N-S (rot.) [km]')
     bottom_right.set_ylabel('Depth [km]')
     bottom_right.invert_yaxis()
 
     plt.legend(prop={'size': MAIN_FONT_SIZE-1})
-    error_contourf(predictions, labels, top_right)
+    error_contourf(predictions_all, labels_all, top_right)
     top_right.set_ylabel('Depth [km]')
     top_right.set_xlabel('N-S (rot.) [km]')
 
@@ -444,6 +468,41 @@ def plot_predictions_and_labels(predictions, labels, name=None):
 
     add_char_labels([top_left, top_right, bottom_left, bottom_right])
 
+    save_figure(fig, name)
+
+
+def mislocation_vs_gaps(predictions, labels, gaps, name):
+    gap_rates = num.empty(len(gaps))
+    for gap_i, gap in enumerate(gaps):
+        nchannels, nsamples = gap.shape
+        gap_rates[gap_i] = num.sum(gap) / num.float(nsamples * nsamples)
+
+    labels = num.array(labels)
+    errors = predictions - labels
+    errors_abs = num.sqrt(num.sum(errors**2, axis=1))
+    
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    ax.plot(errors_abs, gap_rates, 'o', alpha=0.2)
+    save_figure(fig, name)
+
+
+def mislocation_vs_gaps_many(results, labels, gaps, name):
+    '''
+    :param results: dict, keys=sdropout, values=predicted locations
+    '''
+    gap_rates = num.empty(len(gaps))
+    for gap_i, gap in enumerate(gaps):
+        nchannels, nsamples = gap.shape
+        gap_rates[gap_i] = num.sum(gap) / num.float(nsamples * nsamples)
+
+    labels = num.array(labels)
+    errors = predictions - labels
+    errors_abs = num.sqrt(num.sum(errors**2, axis=1))
+    
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    ax.plot(errors_abs, gap_rates, '.')
     save_figure(fig, name)
 
 
