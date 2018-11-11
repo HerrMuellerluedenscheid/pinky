@@ -341,7 +341,7 @@ def error_map(prediction, label, ax, legend=None, text_labels=None):
             ax.text(*a, fontsize=POINT_SIZE)
 
 
-def error_contourf(predictions, labels, ax):
+def error_contourf(predictions, labels, ax, text_labels=None):
     '''Make a smoothed contour plot showing absolute errors along the slab.'''
     errors = num.sqrt(num.sum((predictions-labels)**2, axis=1))
     med = num.median(errors)
@@ -367,6 +367,11 @@ def error_contourf(predictions, labels, ax):
     cbar = colorbar(s, cax=cax, )
     cbar.ax.tick_params(labelsize=MAIN_FONT_SIZE-2)
 
+    if text_labels:
+        assert len(text_labels) == len(predictions)
+        for ip, p in enumerate(predictions):
+            ax.text(p[0], p[2], text_labels[ip], fontsize=POINT_SIZE)
+
 
 def rotate(locations, degrees):
     r = degrees * num.pi / 180.
@@ -387,6 +392,7 @@ def plot_predictions_and_labels(
 
     predictions_all = predictions
     labels_all = labels
+    text_labels_all = text_labels
 
     if NPOINTS:
         predictions = predictions[: NPOINTS]
@@ -459,7 +465,9 @@ def plot_predictions_and_labels(
     bottom_right.invert_yaxis()
 
     plt.legend(prop={'size': MAIN_FONT_SIZE-1})
-    error_contourf(predictions_all, labels_all, top_right)
+    error_contourf(predictions_all, labels_all, top_right,
+            text_labels=text_labels_all)
+
     top_right.set_ylabel('Depth [km]')
     top_right.set_xlabel('N-S (rot.) [km]')
 

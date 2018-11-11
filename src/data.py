@@ -176,17 +176,18 @@ class DataGeneratorBase(Object):
 
     nmax = Int.T(optional=True)
     labeled = Bool.T(default=True)
+    blacklist = List.T(optional=True, help='List of indices to ignore.')
 
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
+        self.blacklist = set() if not self.blacklist else set(self.blacklist)
         self.n_classes = 3
 
     def normalize_label(self, label):
         if self.labeled:
             return self.config.normalize_label(label)
-        else:
-            return label
+        return label
 
     def set_config(self, pinky_config):
         self.config = pinky_config
@@ -245,6 +246,15 @@ class DataGeneratorBase(Object):
         patters. Otherwise returns `True`'''
         return not util.match_nslc(self.config.blacklist, tr.nslc_id)
 
+    def filter_iter(self, iterator):
+        '''Apply *blacklist*ing by example indices
+
+        :param iterator: producing iterator
+        '''
+        for i, item in enumerate(iterator):
+            if i not in self.blacklist:
+                yield i, item
+
     @property
     def generate_output_types(self):
         '''Return data types of features and labels'''
@@ -293,18 +303,15 @@ class DataGeneratorBase(Object):
         '''Takes the output of `iter_examples_and_labels` and applies post
         processing (see: `process_chunk`).
         '''
-        for iexample, (chunk, label) in enumerate(
-                self.iter_chunked(tinc)):
-
+        for i, (chunk, label) in self.filter_iter(self.iter_chunked(tinc)):
             yield self.process_chunk(chunk), self.normalize_label(label)
 
     def generate(self):
         '''Takes the output of `iter_examples_and_labels` and applies post
         processing (see: `process_chunk`).
         '''
-        for iexample, (chunk, label) in enumerate(
+        for i, (chunk, label) in self.filter_iter(
                 self.iter_examples_and_labels()):
-
             yield self.process_chunk(chunk), self.normalize_label(label)
 
     def extract_labels(self):
@@ -314,8 +321,22 @@ class DataGeneratorBase(Object):
 
     def iter_labels(self):
         '''Iterate through labels.'''
-        for _, label in self.iter_examples_and_labels():
+        for i, (_, label) in self.filter_iter(
+                self.iter_examples_and_labels()):
             yield label
+
+    @property
+    def text_labels(self):
+        '''Returns a list of strings to identify the labels.
+
+        Overwrite this method for more meaningfull identifiers.'''
+        return ['%i' % (i) for i, d in
+                self.filter_iter(self.iter_examples_and_labels())]
+
+    def gaps(self):
+        '''Returns a list containing the gaps of each example'''
+        return [num.isnan(ex) for _, (ex, _) in self.filter_iter(
+            self.iter_examples_and_labels())]
 
     @property
     def output_shapes(self):
@@ -328,7 +349,6 @@ class DataGeneratorBase(Object):
             output_shapes=self.output_shapes)
 
     def get_chunked_dataset(self, tinc=1.):
-        # gen = partialmethod(self.generate_chunked, tinc=tinc)
         gen = partial(self.generate_chunked, tinc=tinc)
         return tf.data.Dataset.from_generator(
             gen,
@@ -353,17 +373,35 @@ class DataGeneratorBase(Object):
                             label, dtype=num.float32).tobytes()),
                     }))
 
-    def mask(self, chunk):
-        '''For data augmentation: Mask traces in chunks'''
+    def mask(self, chunk, rate):
+        '''For data augmentation: Mask traces in chunks with NaNs.
+        NaNs will be filled by the imputation method provided by the config
+        file.
+
+        :param rate: probability with which traces are NaN-ed
+        '''
         indices = self.nsl_indices
         a = num.random.random(len(indices))
-        i = num.where(a < self.station_dropout_rate)[0]
-        imputation_value = self.config.imputation(chunk)
+        i = num.where(a < rate)[0]
         for ii in i:
-            chunk[indices[ii], :] = imputation_value
+            chunk[indices[ii], :] = num.nan
+
+    def random_trim(self, chunk, margin):
+        '''For data augmentation: Randomly trim examples in time domain with
+        *margin* seconds.'''
+        sample_margin = int(margin / self.config.effective_deltat)
+        nstart = num.random.randint(low=0, high=sample_margin)
+
+        _, n_samples = self.config.tensor_shape
+        nstop = nstart + n_samples
+        chunk[:, :nstart] = 0.
+        chunk[:, nstop:] = 0.
 
     def process_chunk(self, chunk):
         '''Performs preprocessing of data chunks.'''
+
+        if self.config.t_translation_max:
+            self.random_trim(chunk, self.config.t_translation_max)
 
         # add noise
         if self.noise:
@@ -372,17 +410,14 @@ class DataGeneratorBase(Object):
         # apply normalization
         self.config.normalization(chunk)
 
+        # apply station dropout
+        if self.station_dropout_rate:
+            self.mask(chunk, self.station_dropout_rate)
+
         # fill gaps
         if self.config.imputation:
             gaps = num.isnan(chunk)
             chunk[gaps] = self.config.imputation(chunk)
-            self.mask(chunk)
-
-        if num.any(num.isnan(chunk)):
-            logger.warn('NANs left in chunk')
-
-        # chunk -= num.min(chunk)
-        # chunk /= num.max(chunk)
 
         return chunk
 
@@ -460,6 +495,7 @@ class ChannelStackGenerator(DataGeneratorBase):
     @classmethod
     def from_generator(cls, generator):
         x = cls(in_generator=generator, config=generator.config)
+        x.station_dropout_rate = generator.station_dropout_rate
         x.setup()
         return x
 
@@ -536,7 +572,7 @@ class DataGenerator(DataGeneratorBase):
         :param tref: absolute time where to chop the data chunk. Typically first
             p phase onset'''
         indices = indices or range(len(traces))
-        tref = tref - self.config.tpad
+        tref = tref - self.config.effective_tpad
         for i, tr in zip(indices, traces):
             data_len = len(tr.ydata)
             istart_trace = int((tr.tmin - tref) / tr.deltat)
@@ -651,9 +687,7 @@ class PileData(DataGenerator):
         tr_len = self.n_samples * self.deltat_want
         nslc_to_index = self.nslc_to_index
 
-        tpad = self.config.tpad
-        if self.config.highpass is not None:
-            tpad += 0.5 / self.config.highpass
+        tpad = self.config.effective_tpad
 
         tstart = util.stt(self.tstart) if self.tstart else None
         tstop = util.stt(self.tstop) if self.tstop else None
@@ -691,9 +725,7 @@ class PileData(DataGenerator):
         tr_len = self.n_samples * self.deltat_want
         nslc_to_index = self.nslc_to_index
 
-        tpad = self.config.tpad
-        if self.config.highpass is not None:
-            tpad += 0.5 / self.config.highpass
+        tpad = self.config.effective_tpad
 
         for i_m, m in enumerate(self.markers):
             logger.debug('processig marker %s / %s' % (i_m, len(self.markers)))
@@ -765,7 +797,6 @@ class SeismosizerData(DataGenerator):
         self.store = self.engine.get_store(store_id.pop())
 
         self.sources = filter_oob(self.sources, self.targets, self.store.config)
-        print('xxx', len(self.sources))
 
         dt = self.config.deltat_want or self.store.config.deltat
         self.n_samples = int((self.config.sample_length + self.config.tpad) / dt)

@@ -241,15 +241,8 @@ class Model(Object):
 
     def generate_eval_dataset(self, nrepeat=1):
         '''Generator of evaluation dataset.'''
-        return self.config.evaluation_data_generator.get_dataset().repeat(nrepeat).batch(
+        return self.config.evaluation_data_generator.get_dataset().batch(
                 self.batch_size)
-
-    def generate_detect_dataset(self):
-        '''Generator of prediction dataset.'''
-        d = self.config.prediction_data_generator
-        if not d:
-            raise Exception('\nNo prediction data generator defined in config!')
-        return d.get_chunked_dataset(tinc=self.tinc_detect).prefetch(100)
 
     def generate_predict_dataset(self):
         '''Generator of prediction dataset.'''
@@ -264,6 +257,13 @@ class Model(Object):
         if self.shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=self.shuffle_size)
         return dataset.repeat(count=self.n_epochs).batch(self.batch_size)
+
+    def generate_detect_dataset(self):
+        '''Generator of prediction dataset.'''
+        d = self.config.prediction_data_generator
+        if not d:
+            raise Exception('\nNo prediction data generator defined in config!')
+        return d.get_chunked_dataset(tinc=self.tinc_detect).prefetch(100)
 
     def model(self, features, labels, mode):
         '''Setup the model.'''
@@ -465,7 +465,7 @@ class Model(Object):
                 predictions = []
                 for p in self.est.predict(
                         input_fn=self.generate_eval_dataset,
-                        yield_single_examples=True):
+                        yield_single_examples=False):
 
                     predictions.append(p['predictions'])
                 # predictions = self.denormalize_location(num.array(predictions))
@@ -482,8 +482,9 @@ class Model(Object):
             plot.evaluate_errors(
                     all_predictions, labels, name=save_name)
 
-    def evaluate(self):
+    def evaluate(self, annotate=False):
         logger.debug('evaluation...')
+
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
@@ -495,15 +496,47 @@ class Model(Object):
 
                 predictions.extend(p['predictions'])
 
-            save_name = pjoin(self.get_plot_path(), 'mislocation')
-            predictions = num.array(predictions)
-            labels = self.denormalize_location(num.array(labels))
+        save_name = pjoin(self.get_plot_path(), 'mislocation')
+        predictions = num.array(predictions)
+        labels = self.denormalize_location(num.array(labels))
 
-            plot.plot_predictions_and_labels(
-                    predictions, labels, name=save_name)
+        text_labels = None
+        if annotate:
+            # text_labels = [str(i) for i in
+            #         self.config.evaluation_data_generator.iter_labels()]
 
-            save_name = pjoin(self.get_plot_path(), 'mislocation_hists')
-            plot.mislocation_hist(predictions, labels, name=save_name)
+            text_labels = self.config.evaluation_data_generator.text_labels
+
+        plot.plot_predictions_and_labels(
+                predictions, labels, name=save_name, text_labels=text_labels)
+
+        save_name = pjoin(self.get_plot_path(), 'mislocation_hists')
+        plot.mislocation_hist(predictions, labels, name=save_name)
+
+        save_name = pjoin(self.get_plot_path(), 'mislocation_vs_gaps')
+        plot.mislocation_vs_gaps(predictions, labels,
+                self.config.evaluation_data_generator.gaps(),
+                name=save_name)
+
+    def evaluate_station_dropout(self):
+        with self.sess as default:
+            self.est = tf.estimator.Estimator(
+                model_fn=self.model, model_dir=self.get_outdir())
+            labels = [l for _, l in self.config.evaluation_data_generator.generate()]
+            sdropouts = num.linspace(0, 0.8, 0.1)
+            results = {}
+            for sdropout in sdropouts:
+                predictions = []
+                for p in self.est.predict(
+                        input_fn=self.generate_eval_dataset,
+                        yield_single_examples=False):
+
+                    predictions.extend(p['predictions'])
+                results[sdropout] = predictions
+
+        plot.mislocation_vs_gaps_many(results, labels,
+                self.config.evaluation_data_generator.gaps(),
+                name=save_name)
 
     def train_multi_gpu(self, params=None):
         ''' Use multiple GPUs for training.  Buggy...'''

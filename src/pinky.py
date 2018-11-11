@@ -22,6 +22,8 @@ def main():
             help='Predict from input of `evaluation_data_generator` in config.')
     parser.add_argument('--evaluate-errors', action='store_true',
             help='Predict errors input of `evaluation_data_generator` in config.')
+    parser.add_argument('--annotate', action='store_true',
+            help='Add labels in error evaluation plots.')
     parser.add_argument('--predict', action='store_true',
             help='Predict from input of `predict_data_generator` in config.')
     parser.add_argument('--detect', action='store_true',
@@ -151,9 +153,10 @@ def main():
                 model.train_multi_gpu()
             else:
                 model.train_and_evaluate()
-                # model.train()
+
         elif args.evaluate:
-            model.evaluate()
+            model.evaluate(annotate=args.annotate)
+            # model.evaluate_errors()
 
         elif args.evaluate_errors:
             model.evaluate_errors()
