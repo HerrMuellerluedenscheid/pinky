@@ -111,3 +111,14 @@ def append_to_dict(d, k, v):
     d[k] = _m
 
 
+def snr(chunk, split_factor):
+    isplit = int(chunk.shape[1] * split_factor)
+    chunk_masked = num.ma.masked_invalid(chunk)
+    chunk = chunk**2
+    sig = chunk[:, :isplit]
+    noise = chunk[:, isplit:]
+    s = num.sqrt(num.sum(sig, axis=1))
+    n = num.sqrt(num.sum(noise, axis=1))
+
+    return num.nanmean(s/n) / split_factor
+
