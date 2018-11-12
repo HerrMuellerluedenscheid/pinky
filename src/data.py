@@ -23,7 +23,7 @@ import sys
 import copy
 
 from .tf_util import _FloatFeature, _Int64Feature, _BytesFeature
-from .util import delete_if_exists, first_element, filter_oob, ensure_list
+from .util import delete_if_exists, first_element, filter_oob, ensure_list, snr
 
 
 pjoin = os.path.join
@@ -174,15 +174,22 @@ class DataGeneratorBase(Object):
     station_dropout_rate = Float.T(default=0.,
         help='Rate by which to mask all channels of station')
 
+    station_dropout_distribution = Bool.T(default=True,
+        help='If *true*, station dropout will be drawn from a uniform '
+        'distribution limited by this station_dropout.')
+
     nmax = Int.T(optional=True)
     labeled = Bool.T(default=True)
     blacklist = List.T(optional=True, help='List of indices to ignore.')
+
+    random_seed = Int.T(default=0)
 
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
         self.blacklist = set() if not self.blacklist else set(self.blacklist)
         self.n_classes = 3
+        self.evolution = 0
 
     def normalize_label(self, label):
         if self.labeled:
@@ -195,6 +202,9 @@ class DataGeneratorBase(Object):
 
     def setup(self):
         ...
+
+    def reset(self):
+        self.evolution = 0
 
     @property
     def tensor_shape(self):
@@ -306,13 +316,15 @@ class DataGeneratorBase(Object):
         for i, (chunk, label) in self.filter_iter(self.iter_chunked(tinc)):
             yield self.process_chunk(chunk), self.normalize_label(label)
 
-    def generate(self):
+    def generate(self, return_gaps=False):
         '''Takes the output of `iter_examples_and_labels` and applies post
         processing (see: `process_chunk`).
         '''
+        self.evolution += 1
+        num.random.seed(self.random_seed + self.evolution)
         for i, (chunk, label) in self.filter_iter(
                 self.iter_examples_and_labels()):
-            yield self.process_chunk(chunk), self.normalize_label(label)
+            yield self.process_chunk(chunk, return_gaps=return_gaps), self.normalize_label(label)
 
     def extract_labels(self):
         '''Overwrite this method!'''
@@ -335,8 +347,17 @@ class DataGeneratorBase(Object):
 
     def gaps(self):
         '''Returns a list containing the gaps of each example'''
-        return [num.isnan(ex) for _, (ex, _) in self.filter_iter(
-            self.iter_examples_and_labels())]
+        gaps = []
+        for (_, gap), _ in self.generate(return_gaps=True):
+            gaps.append(gap)
+
+        return gaps
+
+    def snrs(self, split_factor):
+        snrs = []
+        for chunk, _ in self.generate():
+            snrs.append(snr(chunk, split_factor))
+        return snrs
 
     @property
     def output_shapes(self):
@@ -380,6 +401,7 @@ class DataGeneratorBase(Object):
 
         :param rate: probability with which traces are NaN-ed
         '''
+        # print(rate)
         indices = self.nsl_indices
         a = num.random.random(len(indices))
         i = num.where(a < rate)[0]
@@ -397,7 +419,7 @@ class DataGeneratorBase(Object):
         chunk[:, :nstart] = 0.
         chunk[:, nstop:] = 0.
 
-    def process_chunk(self, chunk):
+    def process_chunk(self, chunk, return_gaps=False):
         '''Performs preprocessing of data chunks.'''
 
         if self.config.t_translation_max:
@@ -412,14 +434,21 @@ class DataGeneratorBase(Object):
 
         # apply station dropout
         if self.station_dropout_rate:
-            self.mask(chunk, self.station_dropout_rate)
+            if self.station_dropout_distribution:
+                self.mask(chunk, num.random.uniform(
+                    high=self.station_dropout_rate))
+            else:
+                self.mask(chunk, self.station_dropout_rate)
 
         # fill gaps
         if self.config.imputation:
             gaps = num.isnan(chunk)
             chunk[gaps] = self.config.imputation(chunk)
 
-        return chunk
+        if not return_gaps:
+            return chunk
+        else:
+            return chunk, gaps
 
     def write(self, directory):
         '''Write example data to TFRecordDataset using `self.writer`.'''

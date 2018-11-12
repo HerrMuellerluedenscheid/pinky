@@ -1,21 +1,27 @@
 import matplotlib
 MAIN_FONT_SIZE = 10
-font = {'font.size': MAIN_FONT_SIZE}
+font = {'font.size': MAIN_FONT_SIZE, 'text.usetex': True}
 matplotlib.rcParams.update(font)
+matplotlib.rcParams['mathtext.fontset'] = 'custom'
+matplotlib.rcParams['mathtext.rm'] = 'Bitstream Vera Sans'
+matplotlib.rcParams['mathtext.it'] = 'Bitstream Vera Sans:italic'
+matplotlib.rcParams['mathtext.bf'] = 'Bitstream Vera Sans:bold'
 from matplotlib.ticker import FuncFormatter
 from mpl_toolkits.axes_grid1.colorbar import colorbar
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import math
 import numpy as num
 import logging
 from scipy import stats
+from collections import defaultdict
+from .util import snr
 
 logger = logging.getLogger('pinky.plot')
 
 FIG_SIZE = (5., 4.230769230769231)
-# FIG_SIZE = (8.5, 11.)
 POINT_SIZE = 2.
 FIG_SUF = '.pdf'
 NPOINTS = 200
@@ -48,7 +54,7 @@ def clear_ax(ax):
 
 def adjust(fig):
     fig.subplots_adjust(
-        left=0.14, right=0.98, top=0.98, bottom=0.15, wspace=0.01, hspace=0.01)
+        left=0.14, right=0.98, top=0.98, bottom=0.15, wspace=0.005, hspace=0.01)
 
 
 def get_notleft_axs(axs_grid):
@@ -149,8 +155,10 @@ def show_data(model, n=9, nskip=0, shuffle=False):
         xdata = num.arange(n_samples)
 
         for irow, row in enumerate(chunk):
-            row -= num.mean(row)
             axs_w[i].plot(xdata, irow+yscale*row, color='black', linewidth=0.5)
+
+        axs_w[i].text(0, 0, "%1.2f" % snr(chunk, 0.9),
+                 transform=axs_w[i].transAxes, bbox=boxstyle)
 
     [clear_ax(ax) for ax in axs_w]
 
@@ -358,13 +366,18 @@ def error_contourf(predictions, labels, ax, text_labels=None):
 
     cax = inset_axes(ax,
 		     width="2%",  # width = 10% of parent_bbox width
-		     height="50%",  # height : 50%
+		     height="100%",  # height : 50%
 		     loc='lower left',
-		     bbox_to_anchor=(0., 0.05, 1, 1),
+		     bbox_to_anchor=(1.25, 0.0, 1, 1),
 		     bbox_transform=ax.transAxes,
-		     borderpad=0,
-		     )
-    cbar = colorbar(s, cax=cax, )
+		     borderpad=0,)
+
+    # cax.set_title('Err [km]')
+    cbar = colorbar(s, cax=cax)
+    cbar.ax.text(9.5, 0.5, r'$\triangle$DD [km]', rotation=90.,
+            horizontalalignment='center',
+        verticalalignment='center', transform=cax.transAxes)
+
     cbar.ax.tick_params(labelsize=MAIN_FONT_SIZE-2)
 
     if text_labels:
@@ -390,6 +403,9 @@ def add_char_labels(axes, chars='abcdefghijklmnopqstuvwxyz'):
 def plot_predictions_and_labels(
         predictions, labels, name=None, text_labels=None):
 
+    predictions = predictions / 1000.
+    labels = labels / 1000.
+
     predictions_all = predictions
     labels_all = labels
     text_labels_all = text_labels
@@ -401,14 +417,11 @@ def plot_predictions_and_labels(
             text_labels = text_labels[: NPOINTS]
         logger.warn('limiting number of points in scatter plot to %s' % NPOINTS)
 
-    predictions /= 1000.
-    labels /= 1000.
-
     logger.debug('plot predictions and labels')
 
     predictions = num.array(predictions)
     labels = num.array(labels)
-    fig = plt.figure(figsize=(5, 5))
+    fig = plt.figure(figsize=(6, 5))
 
     gs = gridspec.GridSpec(2, 2, width_ratios=[1, 2])
     top_left = fig.add_subplot(gs[0])
@@ -472,7 +485,7 @@ def plot_predictions_and_labels(
     top_right.set_xlabel('N-S (rot.) [km]')
 
     fig.subplots_adjust(
-        left=0.097, right=0.87, top=0.95, bottom=0.1, wspace=0.02, hspace=0.35)
+        left=0.06, right=0.775, top=0.95, bottom=0.1, wspace=0.015, hspace=0.35)
 
     add_char_labels([top_left, top_right, bottom_left, bottom_right])
 
@@ -483,16 +496,52 @@ def mislocation_vs_gaps(predictions, labels, gaps, name):
     gap_rates = num.empty(len(gaps))
     for gap_i, gap in enumerate(gaps):
         nchannels, nsamples = gap.shape
-        gap_rates[gap_i] = num.sum(gap) / num.float(nsamples * nsamples)
+        gap_rates[gap_i] = num.sum(gap) / num.float(nchannels* nsamples)
 
     labels = num.array(labels)
     errors = predictions - labels
     errors_abs = num.sqrt(num.sum(errors**2, axis=1))
     
+    gap_rates_dict = defaultdict(list)
+    npoints_min = 10
+    nmax = nchannels
+    for err, gr in zip(errors_abs, gap_rates):
+        # oder // oder floor??
+        gr = num.round(gr*nmax)
+        if gr < 2:
+            gr -= 1
+        gap_rates_dict[gr].append(err)
+
+    gap_rates_dict = {k: v for (k, v) in gap_rates_dict.items() if len(v) >=
+            npoints_min}
+
     fig = plt.figure(figsize=FIG_SIZE)
     ax = fig.add_subplot(111)
     ax.plot(errors_abs, gap_rates, 'o', alpha=0.2)
     save_figure(fig, name)
+
+    name = 'mislocation_gap_all.pdf'
+    fig = plt.figure(figsize=FIG_SIZE)
+    ax = fig.add_subplot(111)
+    ax.hist(errors_abs, bins=num.arange(0, 800, 10))
+    save_figure(fig, name)
+
+    fig, axs = plt.subplots(len(gap_rates_dict), 1, figsize=(4, 3), sharex=True)
+
+    gr_keys = sorted(gap_rates_dict.keys())
+    for iax, key in enumerate(gr_keys):
+        v = gap_rates_dict[key]
+        ax = axs[iax]
+        ax.hist(v, bins=num.arange(0, 800, 10))
+        ax.text(0.99, 0.99, '%i / %i stations available' % (nmax - key,
+            nmax), verticalalignment='top', horizontalalignment='right',
+            transform=ax.transAxes)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_ylabel('Count')
+    ax.set_xlabel('Deviation from DD [m]')
+    fig.subplots_adjust(hspace=0., bottom=0.19)
+    save_figure(fig, 'mislocation_gap_rates.pdf')
 
 
 def mislocation_vs_gaps_many(results, labels, gaps, name):
@@ -511,6 +560,21 @@ def mislocation_vs_gaps_many(results, labels, gaps, name):
     fig = plt.figure(figsize=FIG_SIZE)
     ax = fig.add_subplot(111)
     ax.plot(errors_abs, gap_rates, '.')
+    save_figure(fig, name)
+
+
+def mislocation_vs_snr(snrs, predictions, labels, name):
+    labels = num.array(labels)
+    errors = predictions - labels
+    errors_abs = num.sqrt(num.sum(errors**2, axis=1))
+    
+    fig = plt.figure(figsize=(FIG_SIZE[0]/1.1, FIG_SIZE[1]/1.1))
+    ax = fig.add_subplot(111)
+    ax.scatter(errors_abs, snrs, s=POINT_SIZE*2, alpha=0.5)
+    ax.set_ylabel('SNR')
+    ax.set_xlim(0., 750)
+    ax.set_xlabel('Deviation from DD [m]')
+    ax.set_ylim(0., 20.)
     save_figure(fig, name)
 
 

@@ -20,6 +20,8 @@ import os
 
 logger = logging.getLogger('pinky.model')
 
+NREPETITION = 1 # ugly emergency hack
+
 
 class Layer(Object):
     '''A 2D CNN followed by dropout and batch normalization'''
@@ -239,10 +241,15 @@ class Model(Object):
         '''model directories.'''
         delete_if_exists(self.get_outdir())
 
-    def generate_eval_dataset(self, nrepeat=1):
+    def generate_eval_dataset(self):
         '''Generator of evaluation dataset.'''
         return self.config.evaluation_data_generator.get_dataset().batch(
                 self.batch_size)
+
+    def generate_eval_dataset_3(self):
+        '''Generator of evaluation dataset.'''
+        return self.config.evaluation_data_generator.get_dataset().batch(
+                self.batch_size).repeat(3)
 
     def generate_predict_dataset(self):
         '''Generator of prediction dataset.'''
@@ -502,9 +509,6 @@ class Model(Object):
 
         text_labels = None
         if annotate:
-            # text_labels = [str(i) for i in
-            #         self.config.evaluation_data_generator.iter_labels()]
-
             text_labels = self.config.evaluation_data_generator.text_labels
 
         plot.plot_predictions_and_labels(
@@ -513,9 +517,41 @@ class Model(Object):
         save_name = pjoin(self.get_plot_path(), 'mislocation_hists')
         plot.mislocation_hist(predictions, labels, name=save_name)
 
+        save_name = pjoin(self.get_plot_path(), 'mislocation_snrs')
+        snrs = self.config.evaluation_data_generator.snrs(split_factor=0.8)
+        plot.mislocation_vs_snr(snrs, predictions, labels, name=save_name)
+
         save_name = pjoin(self.get_plot_path(), 'mislocation_vs_gaps')
+        gaps = self.config.evaluation_data_generator.gaps()
+        # UGLY last minute emergency hack:
+        # gaps = []
+        # NREPETITION = 3
+        # labels = []
+        # predictions = []
+        # self.config.evaluation_data_generator.reset()
+        # with self.sess as default:
+        #     self.est = tf.estimator.Estimator(
+        #         model_fn=self.model, model_dir=self.get_outdir())
+        #     for p in self.est.predict(
+        #             input_fn=self.generate_eval_dataset_3,
+        #             yield_single_examples=False):
+
+        #         predictions.extend(p['predictions'])
+
+        #     self.config.evaluation_data_generator.reset()
+        #     for x in range(NREPETITION):
+        #         labels.extend([l for _, l in
+        #             self.config.evaluation_data_generator.generate()])
+
+        # print(len(predictions))
+        # print(len(labels))
+        # self.config.evaluation_data_generator.reset()
+        # for _igap in range(NREPETITION):
+        #     print('XXXXX', _igap)
+        #     gaps.extend(self.config.evaluation_data_generator.gaps())
+
         plot.mislocation_vs_gaps(predictions, labels,
-                self.config.evaluation_data_generator.gaps(),
+                gaps,
                 name=save_name)
 
     def evaluate_station_dropout(self):
