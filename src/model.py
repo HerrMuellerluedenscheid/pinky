@@ -24,7 +24,11 @@ NREPETITION = 1 # ugly emergency hack
 
 
 class Layer(Object):
-    '''A 2D CNN followed by dropout and batch normalization'''
+    '''Base class for neural network layers.
+    
+    This class and it's inherited classes allows parseing to XML and YAML
+    Checkout https://pyrocko.org/docs/current/# for more information.
+    '''
 
     name = String.T(help='Identifies the model')
     n_filters = Int.T(help='Number of output filters')
@@ -37,7 +41,7 @@ class Layer(Object):
 
     def visualize_kernel(self, estimator, index=0, save_path=None):
         '''Subclass this method for plotting kernels.'''
-        logger.debug('not implemented')
+        logger.debug('method *visualize_kernel* not implemented')
 
     def chain(self, input, levels, training=False, **kwargs):
         '''Subclass this method to attach the layer to a sequential model.'''
@@ -46,9 +50,10 @@ class Layer(Object):
 
 class CNNLayer(Layer):
 
-    '''A 2D CNN followed by dropout and batch normalization'''
+    '''2D CNN layer'''
     kernel_width = Int.T()
-    kernel_height = Int.T(optional=True)
+    kernel_height = Int.T(optional=True,
+        help='If this parameter is not set use *N* channels as height.')
 
     pool_width = Int.T()
     pool_height = Int.T()
@@ -56,9 +61,9 @@ class CNNLayer(Layer):
     dilation_rate = Int.T(default=0)
 
     strides = Tuple.T(2, Int.T(), default=(1, 1))
-    tf_fun = tf.layers.conv2d
 
-    is_detector= Bool.T(default=False)
+    is_detector= Bool.T(default=False,
+        help='If *True* this layer\'s activations contributes to detector.')
 
     def chain(self, input, level, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
@@ -142,6 +147,7 @@ class SeparableCNNLayer(CNNLayer):
 
 
 class DenseLayer(Layer):
+    '''Dense layer'''
 
     def chain(self, input, level, training=False, **kwargs):
         input = tf.contrib.layers.flatten(input)
@@ -155,12 +161,13 @@ class DenseLayer(Layer):
 
 
 class Model(Object):
+    '''Defines your neural network and the basic training strategy.'''
 
     name = String.T(default='unnamed',
         help='Used to identify the model and runs in summy and checkpoint \
             directory')
 
-    config = PinkyConfig.T()
+    config = PinkyConfig.T(help='')
     learning_rate = Float.T(default=1e-3)
     dropout_rate = Float.T(default=0.01)
     batch_size = Int.T(default=10)
@@ -175,7 +182,7 @@ class Model(Object):
 
     tf.logging.set_verbosity(tf.logging.INFO)
     force_dropout = Bool.T(optional=True)
-    layers = List.T(Layer.T(), help='A list of `Layers` instances.')
+    layers = List.T(Layer.T(), help='A list of `Layer` instances.')
 
     def __init__(self, tf_config=None, **kwargs):
         ''' '''
@@ -273,7 +280,7 @@ class Model(Object):
         return d.get_chunked_dataset(tinc=self.tinc_detect).prefetch(100)
 
     def model(self, features, labels, mode):
-        '''Setup the model.'''
+        '''Setup the model, summaries and run training or evaluation.'''
         training = bool(mode == tf.estimator.ModeKeys.TRAIN)
 
         if self.debug: 
@@ -360,17 +367,18 @@ class Model(Object):
                     tf.summary.scalar(k, v[1])
             return tf.estimator.EstimatorSpec(
                     mode=mode, loss=loss, eval_metric_ops=metrics,
-                    evaluation_hooks=[self.get_summary_hook('eval'),
-                        # dump_hook
-                        ])
+                    evaluation_hooks=[self.get_summary_hook('eval'),])
 
     def get_summary_hook(self, subdir=''):
+        '''Return a summary hook storing summaries at *subdir*.'''
         return tf.train.SummarySaverHook(
             self.summary_nth_step,
             output_dir=pjoin(self.get_summary_outdir(), subdir),
             scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()))
 
     def train_and_evaluate(self):
+        '''Execute training and evaluation and visualize kernels as well as
+        activation maps at the end of all epochs.'''
         self.save_model_in_summary()
         with self.sess as default:
             self.est = tf.estimator.Estimator(
@@ -387,7 +395,7 @@ class Model(Object):
             result = tf.estimator.train_and_evaluate(self.est, train_spec, eval_spec)
 
         self.save_kernels()
-        # self.save_activation_maps()
+        self.save_activation_maps()
 
         return result
 
@@ -418,9 +426,17 @@ class Model(Object):
         logger.info('This took %1.1f seconds ' % (time.time()-tstart))
         logger.info('Saved locations in %s' % fn_out)
 
-    def detect(self, tinc=None):
+    def detect(self, tinc=None, detector_threshold=1.8):
+        '''Detect events
+
+        Summarizes the energy of layers in your network that have their
+        *is_detector* flag set to *True*.
+
+        :param tinc: time increment to step through the dataset.
+        :param detector_threshold: triggers a detection when summed energy
+            exceeds this value.
+        '''
         tpeaksearch = 5.
-        detector_threshold = 1.8
         self.tinc_detect = tinc or 1.0
         fn_detector_trace = 'detector.mseed'
         fn_detections = 'detections.pf'
@@ -455,9 +471,17 @@ class Model(Object):
             logger.info('Saving detector level: %s' % fn_detector_trace)
             io.save([tr], fn_detector_trace)
 
-    def evaluate_errors(self, n_predict=100):
+    def evaluate_errors(self, n_predict=100, force_dropout=0.333):
+        '''Repeatedly run the prediction for *n_predict* times where the first
+        run is without and the subsequent are with enforced dropout rate
+        *force_dropout*.
+
+        This is allows to evaluate location accuracy without a given
+        reference catatog of known event locations. It is basically a jacknife
+        applied to the neural network layers.
+        '''
         logger.debug('evaluation...')
-        self.dropout_rate = 0.333
+        self.dropout_rate = force_dropout
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
@@ -466,8 +490,6 @@ class Model(Object):
 
             all_predictions = []
 
-            # repeating_eval = functools.partialmethod(self.generate_eval_dataset,
-            #         nrepeat=n_predict
             for n in range(n_predict):
                 predictions = []
                 for p in self.est.predict(
@@ -490,6 +512,10 @@ class Model(Object):
                     all_predictions, labels, name=save_name)
 
     def evaluate(self, annotate=False):
+        ''' Run the evaluation and visualize the results.
+
+        :param annotate: label all events
+        '''
         logger.debug('evaluation...')
 
         with self.sess as default:
@@ -523,43 +549,20 @@ class Model(Object):
 
         save_name = pjoin(self.get_plot_path(), 'mislocation_vs_gaps')
         gaps = self.config.evaluation_data_generator.gaps()
-        # UGLY last minute emergency hack:
-        # gaps = []
-        # NREPETITION = 3
-        # labels = []
-        # predictions = []
-        # self.config.evaluation_data_generator.reset()
-        # with self.sess as default:
-        #     self.est = tf.estimator.Estimator(
-        #         model_fn=self.model, model_dir=self.get_outdir())
-        #     for p in self.est.predict(
-        #             input_fn=self.generate_eval_dataset_3,
-        #             yield_single_examples=False):
-
-        #         predictions.extend(p['predictions'])
-
-        #     self.config.evaluation_data_generator.reset()
-        #     for x in range(NREPETITION):
-        #         labels.extend([l for _, l in
-        #             self.config.evaluation_data_generator.generate()])
-
-        # print(len(predictions))
-        # print(len(labels))
-        # self.config.evaluation_data_generator.reset()
-        # for _igap in range(NREPETITION):
-        #     print('XXXXX', _igap)
-        #     gaps.extend(self.config.evaluation_data_generator.gaps())
 
         plot.mislocation_vs_gaps(predictions, labels,
                 gaps,
                 name=save_name)
 
-    def evaluate_station_dropout(self):
+    def evaluate_station_dropout(self, start=0., stop=0.8, inc=0.1):
+        '''
+        Predict for a range of station dropouts and visualize the results.
+        '''
         with self.sess as default:
             self.est = tf.estimator.Estimator(
                 model_fn=self.model, model_dir=self.get_outdir())
             labels = [l for _, l in self.config.evaluation_data_generator.generate()]
-            sdropouts = num.linspace(0, 0.8, 0.1)
+            sdropouts = num.linspace(start, stop, inc)
             results = {}
             for sdropout in sdropouts:
                 predictions = []
@@ -606,11 +609,13 @@ class Model(Object):
             layer.visualize_kernel(self.est, save_path=save_path)
 
     def save_activation_maps(self, index=0):
+        '''Visualizes all activation maps at given *index* of all layers.'''
         save_path = pjoin(self.get_summary_outdir(), 'kernels')
         ensure_dir(save_path)
         for layer in self.layers:
             plot.getActivations(layer, stimuli)
 
     def save_model_in_summary(self):
+        '''Dump neural network configuration to summary directory as YAML.'''
         self.regularize()
         self.dump(filename=pjoin(self.get_summary_outdir(), 'model.config'))

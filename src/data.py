@@ -41,12 +41,15 @@ def all_NAN(d):
 
 class ChunkOperation(Object):
     '''Modifies a data chunk (2D image) when called.'''
+
     def __call__(self, chunk):
         pass
 
 
 class Normalization(ChunkOperation):
+    '''Data normalization in 2D'''
     pass
+    
 
 
 class NormalizeMax(Normalization):
@@ -57,6 +60,7 @@ class NormalizeMax(Normalization):
 
 
 class NormalizeLog(Normalization):
+    '''Normalize by taking the logarithm of amplitudes.'''
     def __call__(self, chunk):
         chunk -= num.nanmedian(chunk)
         # sign = num.sign(chunk)
@@ -68,10 +72,11 @@ class NormalizeLog(Normalization):
         # chunk += mean
 
 
-
-
 class NormalizeFixScale(Normalization):
+    '''Normalize by division through a defined *factor*.'''
+
     factor = Float.T()
+
     def __call__(self, chunk):
         chunk[:] /= self.factor
 
@@ -89,6 +94,8 @@ class NormalizeNthRoot(Normalization):
 
 
 class NormalizeChannelMax(Normalization):
+    '''Normalize channel wise by division through the maximum of each channel.
+    '''
     def __call__(self, chunk):
         chunk /= ((num.nanmax(num.abs(chunk), axis=1)[:, num.newaxis]) + EPSILON )
 
@@ -131,6 +138,7 @@ class Noise(ChunkOperation):
 
 
 class WhiteNoise(Noise):
+    '''Add white noise to data.'''
 
     def __call__(self, chunk):
         chunk += num.random.random(chunk.shape) * self.level
@@ -188,7 +196,7 @@ class DataGeneratorBase(Object):
         self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
         self.blacklist = set() if not self.blacklist else set(self.blacklist)
-        self.n_classes = 3
+        self.n_classes = self.config.n_classes
         self.evolution = 0
 
     def normalize_label(self, label):
@@ -493,7 +501,7 @@ class ChannelStackGenerator(DataGeneratorBase):
         '''Return a tuple containing the shape of feature arrays and number of
         labels.
         '''
-        return (self.tensor_shape, self.n_classes)
+        return (self.tensor_shape, self.config.n_classes)
 
     def iter_chunked(self, tinc):
         d = self.nslc_to_index
@@ -613,11 +621,6 @@ class DataGenerator(DataGeneratorBase):
                 istart_trace: min(data_len, self.n_samples-istart_array) \
                     + istart_trace]
             chunk[i, istart_array: istart_array+ydata.shape[0]] = ydata
-
-        # i_unmask = num.logical_not(num.isnan(chunk))
-        # chunk[i_unmask] = (num.nanmax(num.abs(chunk)) * 2.)
-        # chunk[i_unmask] += 0.5
-        # return chunk
 
 
 class PileData(DataGenerator):

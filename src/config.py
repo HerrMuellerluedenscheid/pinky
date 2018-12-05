@@ -15,39 +15,41 @@ logger = logging.getLogger(__name__)
 
 
 class PinkyConfig(Object):
+    '''Configuration of data IO and data preprocessing'''
 
     blacklist = List.T(
         String.T(), help='List blacklist patterns (may contain wild cards')
 
-    stack_channels = Bool.T(default=False)
+    stack_channels = Bool.T(default=False,
+        help='If *True* stack abs. amplitudes of all channels of a station')
+
     sample_length = Float.T(optional=True, help='Length in seconds. Not needed \
         when using TFRecordData')
 
     data_generator = DataGeneratorBase.T()
     evaluation_data_generator = DataGeneratorBase.T(optional=True)
     prediction_data_generator = DataGeneratorBase.T(optional=True)
+
     normalization = Normalization.T(default=Normalization(), optional=True)
+
+    absolute = Bool.T(help='Use absolute amplitudes', default=False)
+
     imputation = Imputation.T(
         optional=True, help='How to mask and fill gaps')
     
     reference_target = Target.T(optional=True)
 
     n_classes = Int.T(default=3)
-    _channels =  List.T(
-            Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
-    _n_samples = Int.T(optional=True, help='(Don\'t modify)')
 
     # Not implemented for DataGeneratorBase
-    highpass = Float.T(optional=True, help='highpass filter corner frequency')
-    lowpass = Float.T(optional=True, help='lowpass filter corner frequency')
+    highpass = Float.T(optional=True, help='Highpass filter corner frequency')
+    lowpass = Float.T(optional=True, help='Lowpass filter corner frequency')
 
     highpass_order = Int.T(default=4, optional=True)
     lowpass_order = Int.T(default=4, optional=True)
 
     normalize_labels = Bool.T(default=True,
         help='Normalize labels by std')
-
-    absolute = Bool.T(help='Use absolute amplitudes', default=False)
 
     tpad = Float.T(
         default=0.,
@@ -57,9 +59,17 @@ class PinkyConfig(Object):
         help='Augment data by uniformly shifting examples in time limited by '
         'this parameters. This will increase *tpad*')
 
-    deltat_want = Float.T(optional=True)
-    label_scale = num.ones(3, dtype=num.float32)
-    label_median = num.ones(3, dtype=num.float32)
+    deltat_want = Float.T(optional=True,
+        help='If set, down or upsample traces to this sampling rate.')
+
+    # These value or not meant to be modified. If they are set in a
+    # configuration this happened automatically to port values accross
+    # configurations.
+    _label_scale = num.ones(3, dtype=num.float32, help='(Don\'t modify)')
+    _label_median = num.ones(3, dtype=num.float32, help='(Don\'t modify)')
+    _channels =  List.T(
+            Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
+    _n_samples = Int.T(optional=True, help='(Don\'t modify)')
 
     def setup(self):
 
@@ -69,11 +79,11 @@ class PinkyConfig(Object):
             # for training is required in any case at the moment!
             # Better store normalization data during training to recycle at
             # prediction time.
-            self.label_median = num.median(
+            self._label_median = num.median(
                     num.array(list(
                         self.data_generator.iter_labels())), axis=0)
 
-            self.label_scale = num.mean(num.std(
+            self._label_scale = num.mean(num.std(
                     num.array(list(
                         self.data_generator.iter_labels())), axis=0))
 
@@ -126,11 +136,11 @@ class PinkyConfig(Object):
 
     def normalize_label(self, label):
         '''label has to be a numpy array'''
-        return (label - self.label_median) / self.label_scale
+        return (label - self._label_median) / self._label_scale
 
     def denormalize_label(self, label):
         '''label has to be a numpy array'''
-        return (label * self.label_scale) + self.label_median
+        return (label * self._label_scale) + self._label_median
 
     @property
     def channels(self):
