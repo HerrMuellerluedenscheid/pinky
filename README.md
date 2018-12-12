@@ -1,7 +1,7 @@
 Prereqs
 -------
 
- - pyrocko
+ - [pyrocko](https://pyrocko.org/)
  - tensorflow
  - scikit-optimize (optional for hyperparameter optimization)
 
