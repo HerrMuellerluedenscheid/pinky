@@ -55,8 +55,13 @@ class CNNLayer(Layer):
     kernel_height = Int.T(optional=True,
         help='If this parameter is not set use *N* channels as height.')
 
-    pool_width = Int.T()
-    pool_height = Int.T()
+    pool_width = Int.T(
+        optional=True,
+        help='If not set pool_height=kernel_height')
+
+    pool_height = Int.T(
+        optional=True,
+        help='If not set pool_height=kernel_height')
 
     dilation_rate = Int.T(default=0)
 
@@ -64,6 +69,19 @@ class CNNLayer(Layer):
 
     is_detector= Bool.T(default=False,
         help='If *True* this layer\'s activations contributes to detector.')
+
+    def __init__(self, *args, **kwargs):
+        Layer.__init__(self, *args, **kwargs)
+
+        if not self.pool_width:
+            logger.info(
+                'Pool width is undefined. Setting equal to kernel width')
+            self.pool_width = self.kernel_width
+
+        if not self.pool_height:
+            logger.info(
+                'Pool heigth is undefined. Setting equal to kernel height')
+            self.pool_height = self.kernel_height
 
     def chain(self, input, level, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape

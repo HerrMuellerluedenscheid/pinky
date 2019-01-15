@@ -196,7 +196,6 @@ class DataGeneratorBase(Object):
         self.config = kwargs.pop('config', None)
         super().__init__(**kwargs)
         self.blacklist = set() if not self.blacklist else set(self.blacklist)
-        self.n_classes = self.config.n_classes
         self.evolution = 0
 
     def normalize_label(self, label):

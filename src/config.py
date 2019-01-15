@@ -65,8 +65,8 @@ class PinkyConfig(Object):
     # These value or not meant to be modified. If they are set in a
     # configuration this happened automatically to port values accross
     # configurations.
-    _label_scale = num.ones(3, dtype=num.float32, help='(Don\'t modify)')
-    _label_median = num.ones(3, dtype=num.float32, help='(Don\'t modify)')
+    # _label_scale = num.ones(3, dtype=num.float32, help='(Don\'t modify)')
+    # _label_median = num.ones(3, dtype=num.float32, help='(Don\'t modify)')
     _channels =  List.T(
             Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
     _n_samples = Int.T(optional=True, help='(Don\'t modify)')
