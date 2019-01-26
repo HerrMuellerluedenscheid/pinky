@@ -5,6 +5,12 @@ Prereqs
  - tensorflow
  - scikit-optimize (optional for hyperparameter optimization)
 
+You can use pip to install dependencies:
+
+    pip install -r requirements.txt
+
+Note that this will install tensorflow without GPU support. Checkout the [tensorflow documentation](https://www.tensorflow.org/install/pip) to install with GPU support
+
 Invoke
 ------
 
