@@ -14,7 +14,7 @@ def main():
 
     parser = argparse.ArgumentParser(
                 description='')
-    parser.add_argument('--config')
+    parser.add_argument('--config', help='Load a configuration file')
     parser.add_argument('--configs',
             help='load a comma separated list of configs and process them')
     parser.add_argument('--train', action='store_true')
@@ -48,6 +48,9 @@ def main():
     parser.add_argument('--force', action='store_true')
 
     args = parser.parse_args()
+    if not (args.config or args.configs):
+        parser.print_help()
+        sys.exit('\n use `--config` to load a configuration file\n')
 
     if (args.predict or args.evaluate or args.evaluate_errors) and args.clear:
         sys.exit('\nCannot `--clear` when running `--predict` or `--evaluate`')
