@@ -87,6 +87,11 @@ def main():
         if args.show_data:
             from . import plot
             import matplotlib.pyplot as plt
+            import matplotlib
+            if os.environ.get('DISPLAY','') == '':
+                print('no display found. Using non-interactive Agg backend')
+                matplotlib.use('Agg')
+
             nskip = args.nskip or 0
             print(args.show_data)
             plot.show_data(model, n=args.show_data, nskip=nskip, shuffle=False)
