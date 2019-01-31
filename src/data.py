@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 from pyrocko.io import save, load
-from pyrocko.model import load_stations, load_events, Event
+from pyrocko.model import load_events, Event
 from pyrocko import guts
 from pyrocko.guts import Object, String, Int, Float, Tuple, Bool, Dict, List
 from pyrocko.gui import marker
@@ -194,7 +194,7 @@ class DataGeneratorBase(Object):
 
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop('config', None)
-        super().__init__(**kwargs)
+        super(DataGeneratorBase, self).__init__(*args, **kwargs)
         self.blacklist = set() if not self.blacklist else set(self.blacklist)
         self.evolution = 0
 
@@ -624,14 +624,10 @@ class DataGenerator(DataGeneratorBase):
 
 class PileData(DataGenerator):
     '''Data generator for locally saved data.'''
-    fn_stations = String.T()
     data_paths = List.T(String.T())
     data_format = String.T(default='detect')
     fn_markers = String.T()
     fn_events = String.T(optional=True)
-    sort_markers = Bool.T(default=False,
-            help= 'Sorting markers speeds up data io. Shuffled markers \
-            improve generalization')
     align_phase = String.T(default='P')
 
     tstart = String.T(optional=True)
@@ -660,22 +656,23 @@ class PileData(DataGenerator):
                     [marker.EventMarker(e) for e in
                 load_events(self.fn_events)])
 
-        if self.sort_markers:
-            logger.info('sorting markers!')
-            markers.sort(key=lambda x: x.tmin)
         marker.associate_phases_to_events(markers)
+        markers = [m for m in markers if isinstance(m, marker.PhaseMarker)]
 
         markers_by_nsl = {}
         for m in markers:
-            if not m.match_nsl(self.config.reference_target.codes[:3]):
-                continue
+            # if not m.match_nsl(self.config.reference_target.codes[:3]):
+            #     continue
 
             if m.get_phasename().upper() != self.align_phase:
                 continue
 
             markers_by_nsl.setdefault(m.one_nslc()[:3], []).append(m)
 
-        assert(len(markers_by_nsl) == 1)
+        if len(markers_by_nsl) == 0:
+            raise Exception(
+                'No marker assigned to reference target:\n%s' %
+                self.config.reference_target)
 
         # filter markers that do not have an event assigned:
         self.markers = list(markers_by_nsl.values())[0]
@@ -785,13 +782,6 @@ class PileData(DataGenerator):
 class SeismosizerData(DataGenerator):
     fn_sources = String.T(
             help='filename containing pyrocko.gf.seismosizer.Source instances')
-    fn_targets = String.T(
-            help='filename containing pyrocko.gf.seismosizer.Target instances',
-            optional=True)
-    fn_stations = String.T(
-            help='filename containing pyrocko.model.Station instances. Will be\
-                converted to Target instances',
-            optional=True)
 
     store_id = String.T(optional=True)
     center_sources = Bool.T(
@@ -803,52 +793,32 @@ class SeismosizerData(DataGenerator):
 
     def setup(self):
         self.sources = guts.load(filename=self.fn_sources)
-        self.targets = []
-
-        if self.fn_targets:
-            self.targets.extend(guts.load(filename=self.fn_targets))
-
-        if self.fn_stations:
-            stats = load_stations(self.fn_stations)
-            self.targets.extend(self.cast_stations_to_targets(stats))
-
         if self.store_id:
-            for t in self.targets:
+            for t in self.config.targets:
                 t.store_id = self.store_id
 
         if self.center_sources:
             self.move_sources_to_station_center()
 
-        self.config.channels = [t.codes for t in self.targets]
-        store_ids = [t.store_id for t in self.targets]
+        self.config.channels = [t.codes for t in self.config.targets]
+        store_ids = [t.store_id for t in self.config.targets]
         store_id = set(store_ids)
         assert len(store_id) == 1, 'More than one store used. Not \
                 implemented yet'
 
         self.store = self.engine.get_store(store_id.pop())
 
-        self.sources = filter_oob(self.sources, self.targets, self.store.config)
+        self.sources = filter_oob(self.sources, self.config.targets, self.store.config)
 
         dt = self.config.deltat_want or self.store.config.deltat
         self.n_samples = int((self.config.sample_length + self.config.tpad) / dt)
 
     def move_sources_to_station_center(self):
         '''Transform the center of sources to the center of stations.'''
-        lat, lon = orthodrome.geographic_midpoint_locations(self.targets)
+        lat, lon = orthodrome.geographic_midpoint_locations(self.config.targets)
         for s in self.sources:
             s.lat = lat
             s.lon = lon
-
-    def cast_stations_to_targets(self, stations):
-        targets = []
-        channels = 'ENZ'
-        for s in stations:
-            targets.extend(
-                [Target(codes=(s.network, s.station, s.location, c),
-                    lat=s.lat, lon=s.lon, elevation=s.elevation,) for c in
-                    channels])
-
-        return targets
 
     def extract_labels(self, source):
         if not self.labeled:
@@ -857,11 +827,11 @@ class SeismosizerData(DataGenerator):
 
     def iter_examples_and_labels(self):
         ensure_list(self.sources)
-        ensure_list(self.targets)
+        ensure_list(self.config.targets)
 
         response = self.engine.process(
             sources=self.sources,
-            targets=self.targets)
+            targets=self.config.targets)
 
         for isource, source in enumerate(response.request.sources):
             traces = [x.trace.pyrocko_trace() for x in \
@@ -870,7 +840,7 @@ class SeismosizerData(DataGenerator):
             for tr in traces:
                 self.preprocess(tr)
             arrivals = [self.store.t(self.onset_phase,
-                (source.depth, source.distance_to(t))) for t in self.targets]
+                (source.depth, source.distance_to(t))) for t in self.config.targets]
             tref = min([a for a in arrivals if a is not None])
             chunk = self.get_raw_data_chunk(self.tensor_shape)
 

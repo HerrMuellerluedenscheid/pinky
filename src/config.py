@@ -5,6 +5,7 @@ import numpy as num
 
 from pyrocko.guts import Object, Float, Int, String, Bool, List, Tuple
 from pyrocko.pile import make_pile
+from pyrocko.model import load_stations
 from pyrocko.gf.seismosizer import Target
 
 from .data import Noise, Normalization, DataGeneratorBase, Imputation
@@ -12,6 +13,18 @@ from .data import ImputationZero, ChannelStackGenerator
 
 
 logger = logging.getLogger(__name__)
+
+
+def stations_to_targets(stations):
+    targets = []
+    channels = 'ENZ'
+    for s in stations:
+        targets.extend(
+            [Target(codes=(s.network, s.station, s.location, c),
+                lat=s.lat, lon=s.lon, elevation=s.elevation,) for c in
+                channels])
+
+    return targets
 
 
 class PinkyConfig(Object):
@@ -37,6 +50,12 @@ class PinkyConfig(Object):
     imputation = Imputation.T(
         optional=True, help='How to mask and fill gaps')
     
+    reference_station = String.T(
+        optional=True,
+        help='define the stations used as a reference location as NSL string')
+
+    fn_stations = String.T(optional=True, help='')
+
     reference_target = Target.T(optional=True)
 
     n_classes = Int.T(default=3)
@@ -70,6 +89,15 @@ class PinkyConfig(Object):
     _channels =  List.T(
             Tuple.T(4, String.T()), optional=True, help='(Don\'t modify)')
     _n_samples = Int.T(optional=True, help='(Don\'t modify)')
+
+    def __init__(self, *args, **kwargs):
+        super(PinkyConfig, self).__init__(*args, **kwargs)
+        stations = load_stations(self.fn_stations)
+        self.targets = stations_to_targets(stations)
+
+        if not self.reference_target:
+            targets_by_code = {'.'.join(t.codes[:3]): t for t in self.targets}
+            self.reference_target = targets_by_code[self.reference_station]
 
     def setup(self):
 
@@ -167,3 +195,4 @@ class PinkyConfig(Object):
     @property
     def tensor_shape(self):
         return (self.n_channels, self._n_samples)
+
