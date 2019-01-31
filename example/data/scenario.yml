@@ -1,0 +1,35 @@
+--- !pf.scenario.ScenarioGenerator
+avoid_water: true
+center_lat: 12.0
+center_lon: 50.0
+radius: 20000.0
+ntries: 500
+source_generator: !pf.scenario.DCSourceGenerator
+  time_min: '2014-01-01 00:00:00'
+  time_max: '2014-01-01 12:00:00'
+  nevents: 10
+  magnitude_min: -0.5
+  radius: 2000
+  depth_min: 8000
+  depth_max: 11000
+target_generators:
+- !pf.scenario.WaveformGenerator
+  avoid_water: true
+  ntries: 500
+  station_generator: !pf.scenario.RandomStationGenerator
+    avoid_water: true
+    ntries: 500
+    nstations: 4
+    network_name: CO
+    with_channels: true
+  noise_generator: !pf.scenario.WhiteNoiseGenerator
+    scale: 1.0e-06
+  store_id: qplayground_total_4_mr_extended_confirmed
+  seismogram_quantity: displacement
+  vmin_cut: 2000.0
+  vmax_cut: 8000.0
+  fmin: 10.0
+  tabulated_phases:
+    - !pf.TPDef
+      id: p
+      definition: 'cake:p'
