@@ -11,8 +11,29 @@ You can use pip to install dependencies:
 
 Note that this will install tensorflow without GPU support. Checkout the [tensorflow documentation](https://www.tensorflow.org/install/pip) to install with GPU support
 
-Invoke
-------
+
+Invocation
+----------
+
+You need to provide pinky with a configuration file.
+
+    pinky --config <config_filename>
+
+
+Check data
+----------
+
+A good starting point to see if data is properly loaded an preprocessed is to
+have look at a couple of examples.
+
+    pinky --config <config_filename> --show-data 9
+
+This will generate a figure with 9 panels show the first 9 preprocessed data labels and
+features from your dataset.
+
+
+Training
+--------
 
 To start training:
 
