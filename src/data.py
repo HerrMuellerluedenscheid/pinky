@@ -659,23 +659,17 @@ class PileData(DataGenerator):
         marker.associate_phases_to_events(markers)
         markers = [m for m in markers if isinstance(m, marker.PhaseMarker)]
 
-        markers_by_nsl = {}
+        markers_dict = defaultdict(list)
         for m in markers:
-            # if not m.match_nsl(self.config.reference_target.codes[:3]):
-            #     continue
-
             if m.get_phasename().upper() != self.align_phase:
                 continue
 
-            markers_by_nsl.setdefault(m.one_nslc()[:3], []).append(m)
+            markers_dict[m.get_event()].append(m)
 
-        if len(markers_by_nsl) == 0:
-            raise Exception(
-                'No marker assigned to reference target:\n%s' %
-                self.config.reference_target)
-
-        # filter markers that do not have an event assigned:
-        self.markers = list(markers_by_nsl.values())[0]
+        self.markers = []
+        for e, _markers in markers_dict.items():
+            first = min(_markers, key=lambda x: x.tmin)
+            self.markers.append(first)
 
         if not self.labeled:
             dummy_event = Event(lat=0., lon=0., depth=0.)
