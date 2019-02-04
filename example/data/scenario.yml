@@ -2,16 +2,18 @@
 avoid_water: true
 center_lat: 12.0
 center_lon: 50.0
-radius: 20000.0
-ntries: 500
+radius: 72000.0
+ntries: 200
+seed: 1
 source_generator: !pf.scenario.DCSourceGenerator
   time_min: '2014-01-01 00:00:00'
-  time_max: '2014-01-01 12:00:00'
-  nevents: 10
-  magnitude_min: -0.5
-  radius: 2000
-  depth_min: 8000
-  depth_max: 11000
+  time_max: '2014-01-02 00:00:00'
+  nevents: 500
+  magnitude_min: 1.
+  magnitude_max: 3.5
+  radius: 30000
+  depth_min: 5000
+  depth_max: 15000
 target_generators:
 - !pf.scenario.WaveformGenerator
   avoid_water: true
@@ -19,12 +21,11 @@ target_generators:
   station_generator: !pf.scenario.RandomStationGenerator
     avoid_water: true
     ntries: 500
-    nstations: 4
+    nstations: 8
     network_name: CO
-    with_channels: true
   noise_generator: !pf.scenario.WhiteNoiseGenerator
-    scale: 1.0e-06
-  store_id: qplayground_total_4_mr_extended_confirmed
+    scale: 1.0e-08
+  store_id: pollino_guerra_100hz
   seismogram_quantity: displacement
   vmin_cut: 2000.0
   vmax_cut: 8000.0
