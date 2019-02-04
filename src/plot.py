@@ -1,6 +1,6 @@
 import matplotlib
 MAIN_FONT_SIZE = 10
-font = {'font.size': MAIN_FONT_SIZE, 'text.usetex': True}
+font = {'font.size': MAIN_FONT_SIZE, 'text.usetex': False}
 matplotlib.rcParams.update(font)
 matplotlib.rcParams['mathtext.fontset'] = 'custom'
 matplotlib.rcParams['mathtext.rm'] = 'Bitstream Vera Sans'
