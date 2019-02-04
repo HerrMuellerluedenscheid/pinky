@@ -5,6 +5,7 @@ import glob
 
 from pyrocko import guts
 from .model import Model
+from .data import DataGeneratorBase
 
 logger = logging.getLogger('pinky')
 
@@ -98,10 +99,6 @@ def main():
             plt.show()
 
         elif args.write_tfrecord:
-            if len(models) != 1:
-                sys.exit('can only process one model at a time')
-
-            model = models[0]
             model_id = args.write_tfrecord
 
             if os.path.isfile(args.write_tfrecord):
