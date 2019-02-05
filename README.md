@@ -1,8 +1,18 @@
+
+Pinky
+-----
+
+Pinky is a simple deep learning toolbox for earthquake localization and detection, for an example study have a look at our application of a [CNN with 3 convolutional layers to a West Bohemia earthquek swarm](https://doi.org/10.1785/0220180320).
+
+To get started, have a look at our small synthetic example generator in the 'example' subdirectory.
+
+
+
 Prereqs
 -------
 
  - [pyrocko](https://pyrocko.org/)
- - tensorflow
+ - [tensorflow](https://www.tensorflow.org/)
  - scikit-optimize (optional for hyperparameter optimization)
 
 You can use pip to install dependencies:
