@@ -51,4 +51,10 @@ programmatically and are not meant to be modified.
 Tensorboard
 -----------
 
+
+
 tensorboard --logdir summary --port 8080
+
+
+
+
