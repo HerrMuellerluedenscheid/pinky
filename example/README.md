@@ -46,3 +46,9 @@ labels of the training and the evaluation data generator defined in your
 
 Note that variables with a prepending underscore (`_`) are generated
 programmatically and are not meant to be modified.
+
+
+Tensorboard
+-----------
+
+tensorboard --logdir summary --port 8080
