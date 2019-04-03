@@ -473,6 +473,8 @@ class DataGeneratorBase(Object):
 class ChannelStackGenerator(DataGeneratorBase):
     '''Stack summed absolute traces of all available channels of a station
     provided by the `generator`.
+
+    Note: Should be replaced with a ChunkOperation
     '''
     in_generator = DataGeneratorBase.T(help='The generator to be compressed')
 

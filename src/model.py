@@ -84,6 +84,9 @@ class CNNLayer(Layer):
             self.pool_height = self.kernel_height
 
     def chain(self, input, level, training=False, dropout_rate=0.):
+        '''
+        :param level: detection level
+        '''
         _, n_channels, n_samples, _ = input.shape
 
         logger.debug('input shape %s' % input.shape)
@@ -135,6 +138,7 @@ class CNNLayer(Layer):
 
 class SeparableCNNLayer(CNNLayer):
 
+    ''' not used '''
     def chain(self, input, level, training=False, dropout_rate=0.):
         _, n_channels, n_samples, _ = input.shape
 
