@@ -7,7 +7,6 @@ Pinky is a simple deep learning toolbox for earthquake localization and detectio
 To get started, have a look at our small synthetic example generator in the 'example' subdirectory.
 
 
-
 Prereqs
 -------
 
@@ -57,3 +56,8 @@ and use the newly created config file to run `--train`
 
 Invoke pinky with `--debug` to enable keep track of weight matrices in
 [tensorboard](https://www.tensorflow.org/guide/summaries_and_tensorboard).
+
+Citation
+--------
+
+> Marius Kriegerowski, Gesa M. Petersen, Hannes Vasyura‐Bathke, Matthias Ohrnberger; A Deep Convolutional Neural Network for Localization of Clustered Earthquakes Based on Multistation Full Waveforms. Seismological Research Letters ; 90 (2A): 510–516. doi: https://doi.org/10.1785/0220180320
