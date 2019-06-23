@@ -11,7 +11,7 @@ Prereqs
 -------
 
  - [pyrocko](https://pyrocko.org/)
- - [tensorflow](https://www.tensorflow.org/)
+ - [tensorflow](https://www.tensorflow.org/) v1.14
  - scikit-optimize (optional for hyperparameter optimization)
 
 You can use pip to install dependencies:
